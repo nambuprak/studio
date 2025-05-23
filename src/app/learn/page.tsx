@@ -8,7 +8,7 @@ import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Card, CardContent, CardHeader, CardTitle, CardFooter } from '@/components/ui/card';
-import { ArrowLeft, Send, MessageSquarePlus, Settings2, LogOut, Trash2, PlusCircle, Edit3, BookOpen } from 'lucide-react';
+import { ArrowLeft, Send, MessageSquarePlus, Settings2, LogOut, Trash2, PlusCircle, Edit3, BookOpen, PlusSquare } from 'lucide-react';
 import {
   SidebarProvider,
   Sidebar,
