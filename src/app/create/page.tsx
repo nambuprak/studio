@@ -250,21 +250,18 @@ export default function CreatePage() {
           </div>
 
           {/* Row 9: Action Buttons */}
-          <div className="flex flex-col sm:flex-row justify-end space-y-2 sm:space-y-0 sm:space-x-4 pt-6 border-t">
+          <div className="flex flex-col sm:flex-row justify-end space-y-3 sm:space-y-0 sm:space-x-3 pt-6 border-t mt-6">
+             <Link href="/" passHref legacyBehavior>
+              <Button variant="outline" size="lg" className="w-full sm:w-auto">
+                <ArrowLeft className="mr-2 h-5 w-5" /> Go Home
+              </Button>
+            </Link>
             <Button variant="destructive" size="lg" onClick={handleClearForm} className="w-full sm:w-auto">
               Clear Form
             </Button>
             <Button size="lg" onClick={handleGenerate} className="w-full sm:w-auto">
               Generate Self Tutor
             </Button>
-          </div>
-          
-          <div className="mt-8 text-center">
-            <Link href="/" passHref legacyBehavior>
-              <Button variant="outline" size="lg">
-                <ArrowLeft className="mr-2 h-5 w-5" /> Go Back to Home
-              </Button>
-            </Link>
           </div>
         </CardContent>
       </Card>
