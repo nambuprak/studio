@@ -2,24 +2,42 @@
 "use client";
 
 import Link from 'next/link';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { BookOpen, Edit3, PlusSquare } from 'lucide-react';
 
-// Mock data for repositories
-const repositories = [
-  { id: 'repo-alpha', name: 'Repo Alpha' },
-  { id: 'repo-beta', name: 'Repo Beta' },
-  { id: 'repo-gamma', name: 'Repo Gamma' },
-  { id: 'repo-delta', name: 'Repo Delta' },
-];
+interface Repository {
+  id: string;
+  name: string;
+}
 
 export default function HomePage() {
   const [selectedRepoId, setSelectedRepoId] = useState<string>('');
+  const [repositories, setRepositories] = useState<Repository[]>([]);
   const router = useRouter();
+
+  useEffect(() => {
+    async function fetchRepositories() {
+      try {
+        // Ensure your Flask server is running on port 5001 (or the port you configured)
+        const response = await fetch('http://localhost:5001/api/repos');
+        if (!response.ok) {
+          throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        const data: Repository[] = await response.json();
+        setRepositories(data);
+      } catch (error) {
+        console.error("Failed to fetch repositories:", error);
+        // Fallback to empty or display an error message
+        setRepositories([]);
+        alert("Could not fetch repositories. Make sure the Flask API server is running on port 5001.");
+      }
+    }
+    fetchRepositories();
+  }, []);
 
   const handleEditClick = () => {
     if (!selectedRepoId) {
@@ -50,11 +68,17 @@ export default function HomePage() {
                 <SelectValue placeholder="Choose a repository..." />
               </SelectTrigger>
               <SelectContent>
-                {repositories.map((repo) => (
-                  <SelectItem key={repo.id} value={repo.id} className="text-base">
-                    {repo.name}
+                {repositories.length > 0 ? (
+                  repositories.map((repo) => (
+                    <SelectItem key={repo.id} value={repo.id} className="text-base">
+                      {repo.name}
+                    </SelectItem>
+                  ))
+                ) : (
+                  <SelectItem value="loading" disabled className="text-base">
+                    Loading repositories...
                   </SelectItem>
-                ))}
+                )}
               </SelectContent>
             </Select>
           </div>
@@ -70,11 +94,12 @@ export default function HomePage() {
                 <BookOpen className="mr-2 h-5 w-5" /> Learn
               </Button>
             </Link>
-            <Button 
-              variant="default" 
-              size="lg" 
+            <Button
+              variant="default"
+              size="lg"
               className="w-full text-base transition-all duration-200 ease-in-out hover:shadow-lg hover:scale-105 active:scale-95"
               onClick={handleEditClick}
+              disabled={repositories.length === 0 && !selectedRepoId}
             >
               <Edit3 className="mr-2 h-5 w-5" /> Edit
             </Button>

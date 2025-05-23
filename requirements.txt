@@ -1,0 +1,16 @@
+pydantic
+python-dotenv
+langchain
+langchain-openai
+langchain-community
+langchain-experimental
+numpy
+scikit-learn
+plotly
+pathspec
+openai
+httpx
+certifi
+chromadb
+flask
+flask-cors

@@ -2,7 +2,7 @@
 "use client";
 
 import Link from 'next/link';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -13,13 +13,10 @@ import { Textarea } from '@/components/ui/textarea';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogTrigger, DialogClose } from '@/components/ui/dialog';
 import { ArrowLeft, PlusCircle, Edit, Trash2, Edit3 } from 'lucide-react';
 
-// Mock data for repositories (can be fetched or managed globally later)
-const repositories = [
-  { id: 'repo-alpha', name: 'Repo Alpha' },
-  { id: 'repo-beta', name: 'Repo Beta' },
-  { id: 'repo-gamma', name: 'Repo Gamma' },
-  { id: 'repo-delta', name: 'Repo Delta' },
-];
+interface Repository {
+  id: string;
+  name: string;
+}
 
 interface AdditionalInfoItem {
   id: string;
@@ -27,9 +24,10 @@ interface AdditionalInfoItem {
   description: string;
 }
 
-export default function EditPage() {
+function EditPageContent() {
   const searchParams = useSearchParams();
   const [selectedRepo, setSelectedRepo] = useState<string>('');
+  const [repositories, setRepositories] = useState<Repository[]>([]);
   const [repoOverview, setRepoOverview] = useState<string>('');
   const [tapBap, setTapBap] = useState<string>('');
   const [fileTypes, setFileTypes] = useState<string>('');
@@ -42,18 +40,39 @@ export default function EditPage() {
   const [editingId, setEditingId] = useState<string | null>(null);
 
   useEffect(() => {
-    const repoIdFromQuery = searchParams.get('repoId');
-    if (repoIdFromQuery && repositories.find(repo => repo.id === repoIdFromQuery)) {
-      setSelectedRepo(repoIdFromQuery);
-      // In a real application, you would fetch and pre-fill all other data for this repoId
-      // For now, we are only pre-selecting the repository.
-      // Example:
-      // setRepoOverview(`Overview for ${repoIdFromQuery}`);
-      // setTapBap(`TAP/BAP for ${repoIdFromQuery}`);
-      // setFileTypes('.ts,.tsx');
-      // setExcludeFolders('node_modules');
-      // setAdditionalInfoList([{id: '1', title: 'Sample Info', description: 'Details for sample info'}]);
+    async function fetchRepositories() {
+      try {
+        const response = await fetch('http://localhost:5001/api/repos');
+        if (!response.ok) {
+          throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        const data: Repository[] = await response.json();
+        setRepositories(data);
+
+        const repoIdFromQuery = searchParams.get('repoId');
+        if (repoIdFromQuery && data.find(repo => repo.id === repoIdFromQuery)) {
+          setSelectedRepo(repoIdFromQuery);
+          // In a real application, you would fetch and pre-fill all other form data for this repoId
+          // For now, we are only pre-selecting the repository.
+          // Example:
+          // const selectedRepoData = await fetch(`http://localhost:5001/api/repo-details/${repoIdFromQuery}`);
+          // const repoDetails = await selectedRepoData.json();
+          // setRepoOverview(repoDetails.overview);
+          // setTapBap(repoDetails.tapBap);
+          // setFileTypes(repoDetails.fileTypes.join(','));
+          // setExcludeFolders(repoDetails.excludeFolders.join(','));
+          // setAdditionalInfoList(repoDetails.additionalInfoList);
+        } else if (repoIdFromQuery) {
+            alert("The repository ID from the URL was not found in the available repositories.");
+        }
+
+      } catch (error) {
+        console.error("Failed to fetch repositories:", error);
+        setRepositories([]);
+        alert("Could not fetch repositories for the edit page. Make sure the Flask API server is running on port 5001.");
+      }
     }
+    fetchRepositories();
   }, [searchParams]);
 
   const openModalForAdd = () => {
@@ -94,13 +113,13 @@ export default function EditPage() {
   const handleDeleteAdditionalInfo = (id: string) => {
     setAdditionalInfoList(additionalInfoList.filter(item => item.id !== id));
   };
-  
+
   const handleUpdate = () => {
     if (!selectedRepo) {
       alert("Please select a repository before updating.");
       return;
     }
-    // In a real app, you'd send this data to a backend to update the existing tutor
+    // In a real app, you'd send this data to a backend (e.g., your Flask API) to update the existing tutor
     console.log("Updating self tutor with data:", {
       selectedRepo,
       repoOverview,
@@ -109,7 +128,7 @@ export default function EditPage() {
       excludeFolders,
       additionalInfoList,
     });
-    alert("Self Tutor update initiated (see console for data).");
+    alert("Self Tutor update initiated (see console for data). This would call a PUT/POST to your Flask API.");
   };
 
   const handleDeleteTutor = () => {
@@ -119,28 +138,25 @@ export default function EditPage() {
     }
     if (confirm("Are you sure you want to delete this Self Tutor configuration? This action cannot be undone.")) {
         console.log("Deleting self tutor configuration for repo:", selectedRepo);
-        alert("Self Tutor configuration deletion initiated.");
+        alert("Self Tutor configuration deletion initiated. This would call a DELETE to your Flask API.");
         // Potentially navigate away or clear form
-        handleClearForm(); 
+        handleClearForm();
     }
   };
 
   const handleClearForm = () => {
-    // For an edit page, "Clear Form" might reset to original loaded values or empty if not applicable
-    // For now, it will behave like the create page and clear all fields
-    // setSelectedRepo(''); // Do not clear selected repo if passed by query, or reset to it.
     const repoIdFromQuery = searchParams.get('repoId');
     if (repoIdFromQuery && repositories.find(repo => repo.id === repoIdFromQuery)) {
-         setSelectedRepo(repoIdFromQuery); // Reset to initial if it was passed
+         setSelectedRepo(repoIdFromQuery);
     } else {
-        setSelectedRepo(''); // Clear if no initial repo was passed or it's invalid
+        setSelectedRepo('');
     }
     setRepoOverview('');
     setTapBap('');
     setFileTypes('');
     setExcludeFolders('');
     setAdditionalInfoList([]);
-    console.log("Form cleared/reset.");
+    console.log("Form cleared/reset. Original data would be re-fetched or restored in a full app.");
   };
 
   return (
@@ -152,27 +168,29 @@ export default function EditPage() {
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-6">
-          {/* Row 2: Select Repo */}
           <div className="space-y-2">
             <Label htmlFor="repo-select-edit" className="text-base font-semibold">Select Repository</Label>
-            <Select value={selectedRepo} onValueChange={setSelectedRepo}>
+            <Select value={selectedRepo} onValueChange={setSelectedRepo} disabled={repositories.length === 0}>
               <SelectTrigger id="repo-select-edit" className="w-full text-base py-2.5">
                 <SelectValue placeholder="Choose a repository..." />
               </SelectTrigger>
               <SelectContent>
-                {repositories.map((repo) => (
-                  <SelectItem key={repo.id} value={repo.id} className="text-base">
-                    {repo.name}
+                {repositories.length > 0 ? (
+                  repositories.map((repo) => (
+                    <SelectItem key={repo.id} value={repo.id} className="text-base">
+                      {repo.name}
+                    </SelectItem>
+                  ))
+                ) : (
+                  <SelectItem value="loading" disabled className="text-base">
+                    Loading repositories...
                   </SelectItem>
-                ))}
+                )}
               </SelectContent>
             </Select>
           </div>
 
-          {/* Row 3: Sub-heading */}
           <h2 className="text-xl font-semibold text-foreground pt-2">Repository Overview</h2>
-
-          {/* Row 4: Textarea for Repo Overview */}
           <div className="space-y-2">
             <Label htmlFor="repo-overview" className="sr-only">Repository Overview</Label>
             <Textarea
@@ -184,7 +202,6 @@ export default function EditPage() {
             />
           </div>
 
-          {/* Row 5: TAP / BAP */}
           <div className="space-y-2">
             <Label htmlFor="tap-bap" className="text-base font-semibold">TAP / BAP</Label>
             <Input
@@ -196,7 +213,6 @@ export default function EditPage() {
             />
           </div>
 
-          {/* Row 6: File Types */}
           <div className="space-y-2">
             <Label htmlFor="file-types" className="text-base font-semibold">File Types (comma-separated)</Label>
             <Input
@@ -208,7 +224,6 @@ export default function EditPage() {
             />
           </div>
 
-          {/* Row 7: Exclude Folders */}
           <div className="space-y-2">
             <Label htmlFor="exclude-folders" className="text-base font-semibold">Exclude Folders (comma-separated)</Label>
             <Input
@@ -220,7 +235,6 @@ export default function EditPage() {
             />
           </div>
 
-          {/* Row 8: Additional Info Section */}
           <div className="space-y-4 pt-4 border-t">
             <h3 className="text-lg font-semibold text-foreground">Additional Specific Details</h3>
             <Dialog open={isModalOpen} onOpenChange={setIsModalOpen}>
@@ -292,7 +306,6 @@ export default function EditPage() {
             )}
           </div>
 
-          {/* Row 9: Action Buttons */}
           <div className="flex flex-col sm:flex-row justify-end space-y-3 sm:space-y-0 sm:space-x-3 pt-6 border-t mt-6">
              <Link href="/" passHref legacyBehavior>
               <Button variant="outline" size="lg" className="w-full sm:w-auto">
@@ -305,12 +318,21 @@ export default function EditPage() {
              <Button variant="destructive" size="lg" onClick={handleDeleteTutor} className="w-full sm:w-auto">
               <Trash2 className="mr-2 h-5 w-5" /> Delete Tutor
             </Button>
-            <Button size="lg" onClick={handleUpdate} className="w-full sm:w-auto">
+            <Button size="lg" onClick={handleUpdate} className="w-full sm:w-auto" disabled={!selectedRepo}>
               Update
             </Button>
           </div>
         </CardContent>
       </Card>
     </main>
+  );
+}
+
+// It's good practice to wrap components that use useSearchParams in a Suspense boundary
+export default function EditPage() {
+  return (
+    <Suspense fallback={<div>Loading...</div>}>
+      <EditPageContent />
+    </Suspense>
   );
 }
