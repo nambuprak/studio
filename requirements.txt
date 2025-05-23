@@ -1,3 +1,4 @@
+
 pydantic
 python-dotenv
 langchain
@@ -14,3 +15,4 @@ certifi
 chromadb
 flask
 flask-cors
+GitPython

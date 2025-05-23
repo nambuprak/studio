@@ -18,7 +18,7 @@ interface AdditionalInfoItem {
 }
 
 export default function CreatePage() {
-  const [selectedRepo, setSelectedRepo] = useState<string>(''); // Stores the project path
+  const [selectedRepo, setSelectedRepo] = useState<string>(''); // Stores the repository URL
   const [repoOverview, setRepoOverview] = useState<string>('');
   const [tapBap, setTapBap] = useState<string>('');
   const [fileTypes, setFileTypes] = useState<string>('');
@@ -75,18 +75,20 @@ export default function CreatePage() {
   
   const handleGenerate = () => {
     if (!selectedRepo.trim()) {
-      alert("Please enter the project folder path.");
+      alert("Please enter the repository URL.");
       return;
     }
+    // In a real application, you would send this data to your Flask backend.
+    // The backend would then clone the repo, process files, etc.
     console.log("Generating self tutor with data:", {
-      selectedRepo, 
+      selectedRepo, // This is now a URL
       repoOverview,
       tapBap,
       fileTypes,
       excludeFolders,
       additionalInfoList,
     });
-    alert("Self Tutor generation initiated (see console for data).");
+    alert("Self Tutor generation initiated (see console for data). Backend would handle repo cloning.");
   };
 
   const handleClearForm = () => {
@@ -108,20 +110,20 @@ export default function CreatePage() {
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-6">
-          {/* Row 2: Select Project Folder Path */}
+          {/* Row 2: Input for Repository URL */}
           <div className="space-y-2">
-            <Label htmlFor="project-folder-path-input" className="text-base font-semibold">Project Folder Path</Label>
+            <Label htmlFor="repository-url-input" className="text-base font-semibold">Repository URL</Label>
             <Input
-              id="project-folder-path-input"
+              id="repository-url-input"
               type="text"
               value={selectedRepo}
               onChange={handlePathChange}
-              placeholder="Enter the full path to your project folder (e.g., /Users/yourname/projects/my-app)"
+              placeholder="e.g., https://github.com/your-username/your-repo.git"
               className="text-base py-3 h-14"
             />
             {selectedRepo && (
               <p className="text-sm text-muted-foreground mt-1">
-                Entered path: <span className="font-medium text-foreground">{selectedRepo}</span>
+                Entered URL: <span className="font-medium text-foreground">{selectedRepo}</span>
               </p>
             )}
           </div>
@@ -137,7 +139,7 @@ export default function CreatePage() {
               placeholder="Describe the repository, its purpose, key technologies, etc."
               value={repoOverview}
               onChange={(e) => setRepoOverview(e.target.value)}
-              className="w-full min-h-[12rem] text-base" // Approx 6-8 lines
+              className="w-full min-h-[12rem] text-base" 
             />
           </div>
 
