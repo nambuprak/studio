@@ -7,18 +7,10 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+// Removed Select components as they are no longer used for repo selection here
 import { Textarea } from '@/components/ui/textarea';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogTrigger, DialogClose } from '@/components/ui/dialog';
 import { ArrowLeft, PlusSquare, PlusCircle, Edit, Trash2 } from 'lucide-react';
-
-// Mock data for repositories (can be fetched or managed globally later)
-const repositories = [
-  { id: 'repo-alpha', name: 'Repo Alpha' },
-  { id: 'repo-beta', name: 'Repo Beta' },
-  { id: 'repo-gamma', name: 'Repo Gamma' },
-  { id: 'repo-delta', name: 'Repo Delta' },
-];
 
 interface AdditionalInfoItem {
   id: string;
@@ -27,7 +19,7 @@ interface AdditionalInfoItem {
 }
 
 export default function CreatePage() {
-  const [selectedRepo, setSelectedRepo] = useState<string>('');
+  const [selectedRepo, setSelectedRepo] = useState<string>(''); // Will now store the selected folder name
   const [repoOverview, setRepoOverview] = useState<string>('');
   const [tapBap, setTapBap] = useState<string>('');
   const [fileTypes, setFileTypes] = useState<string>('');
@@ -38,6 +30,25 @@ export default function CreatePage() {
   const [currentInfoTitle, setCurrentInfoTitle] = useState<string>('');
   const [currentInfoDescription, setCurrentInfoDescription] = useState<string>('');
   const [editingId, setEditingId] = useState<string | null>(null);
+
+  const handleFolderSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
+    if (event.target.files && event.target.files.length > 0) {
+      let displayName = '';
+      const firstItem = event.target.files[0];
+      // webkitRelativePath is present when a directory is selected.
+      // It gives the path relative to the selected directory, e.g., "FolderName/file.txt".
+      // We extract "FolderName".
+      if (firstItem.webkitRelativePath) {
+        displayName = firstItem.webkitRelativePath.split('/')[0];
+      } else {
+        // Fallback if it's a single file or webkitdirectory is not fully supported/used.
+        displayName = firstItem.name;
+      }
+      setSelectedRepo(displayName);
+    } else {
+      setSelectedRepo('');
+    }
+  };
 
   const openModalForAdd = () => {
     setEditingId(null);
@@ -69,7 +80,6 @@ export default function CreatePage() {
       setAdditionalInfoList([...additionalInfoList, { id: crypto.randomUUID(), title: currentInfoTitle, description: currentInfoDescription }]);
     }
     setIsModalOpen(false);
-    // Reset modal fields after save
     setCurrentInfoTitle('');
     setCurrentInfoDescription('');
     setEditingId(null);
@@ -80,9 +90,12 @@ export default function CreatePage() {
   };
   
   const handleGenerate = () => {
-    // In a real app, you'd send this data to a backend or use Genkit
+    if (!selectedRepo.trim()) {
+      alert("Please select a project folder.");
+      return;
+    }
     console.log("Generating self tutor with data:", {
-      selectedRepo,
+      selectedRepo, // This is now the folder name
       repoOverview,
       tapBap,
       fileTypes,
@@ -99,6 +112,11 @@ export default function CreatePage() {
     setFileTypes('');
     setExcludeFolders('');
     setAdditionalInfoList([]);
+    // Reset file input visually (optional, browser-dependent)
+    const fileInput = document.getElementById('project-folder-input') as HTMLInputElement;
+    if (fileInput) {
+      fileInput.value = '';
+    }
     console.log("Form cleared.");
   };
 
@@ -111,21 +129,24 @@ export default function CreatePage() {
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-6">
-          {/* Row 2: Select Repo */}
+          {/* Row 2: Select Project Folder */}
           <div className="space-y-2">
-            <Label htmlFor="repo-select" className="text-base font-semibold">Select Repository</Label>
-            <Select value={selectedRepo} onValueChange={setSelectedRepo}>
-              <SelectTrigger id="repo-select" className="w-full text-base py-2.5">
-                <SelectValue placeholder="Choose a repository..." />
-              </SelectTrigger>
-              <SelectContent>
-                {repositories.map((repo) => (
-                  <SelectItem key={repo.id} value={repo.id} className="text-base">
-                    {repo.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <Label htmlFor="project-folder-input" className="text-base font-semibold">Select Project Folder</Label>
+            <Input
+              id="project-folder-input"
+              type="file"
+              // @ts-ignore because `webkitdirectory` is not in standard HTMLInputElement props
+              webkitdirectory="true" 
+              directory="true" // More standard but less supported attempt for directory selection
+              onChange={handleFolderSelect}
+              className="text-base file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-primary file:text-primary-foreground hover:file:bg-primary/90"
+              placeholder="No folder selected"
+            />
+            {selectedRepo && (
+              <p className="text-sm text-muted-foreground mt-1">
+                Selected: <span className="font-medium text-foreground">{selectedRepo}</span>
+              </p>
+            )}
           </div>
 
           {/* Row 3: Sub-heading */}
