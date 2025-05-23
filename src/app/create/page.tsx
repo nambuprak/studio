@@ -18,7 +18,7 @@ interface AdditionalInfoItem {
 }
 
 export default function CreatePage() {
-  const [selectedRepo, setSelectedRepo] = useState<string>(''); // Stores the selected folder name
+  const [selectedRepo, setSelectedRepo] = useState<string>(''); // Stores the project path
   const [repoOverview, setRepoOverview] = useState<string>('');
   const [tapBap, setTapBap] = useState<string>('');
   const [fileTypes, setFileTypes] = useState<string>('');
@@ -30,37 +30,8 @@ export default function CreatePage() {
   const [currentInfoDescription, setCurrentInfoDescription] = useState<string>('');
   const [editingId, setEditingId] = useState<string | null>(null);
 
-  const handleFolderSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const files = event.target.files;
-    if (files && files.length > 0) {
-      let displayName = '';
-      const pathValue = event.target.value; // e.g., C:\fakepath\FolderName
-
-      if (pathValue) {
-        // Primarily for Chrome-like browsers that provide a 'fakepath' with the folder name
-        const parts = pathValue.split(/[\\/]/);
-        displayName = parts[parts.length - 1];
-      } else if (files[0].webkitRelativePath) {
-        // For browsers that provide relative paths for files within the folder
-        // e.g., "FolderName/file.txt" -> "FolderName"
-        displayName = files[0].webkitRelativePath.split('/')[0];
-      } else if (files.length === 1 && files[0].name && files[0].size === 0 && files[0].type === "") {
-        // Special case for selecting an empty folder in some browsers.
-        // files[0].name is the actual folder name.
-        displayName = files[0].name;
-      } else {
-        // If the above methods fail, we cannot reliably determine the folder name
-        // from the File API for a non-empty folder.
-        // `files[0].name` would be the name of the first file, not the folder.
-        // The browser might display "X files" in the input field itself.
-        // We'll use a generic name for our separate display.
-        displayName = "Selected Project Folder";
-      }
-      setSelectedRepo(displayName);
-    } else {
-      // No files selected or selection cancelled
-      setSelectedRepo('');
-    }
+  const handlePathChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    setSelectedRepo(event.target.value);
   };
 
   const openModalForAdd = () => {
@@ -103,12 +74,12 @@ export default function CreatePage() {
   };
   
   const handleGenerate = () => {
-    if (!selectedRepo.trim() || selectedRepo === "Selected Project Folder") {
-      alert("Please select a project folder.");
+    if (!selectedRepo.trim()) {
+      alert("Please enter the project folder path.");
       return;
     }
     console.log("Generating self tutor with data:", {
-      selectedRepo, // This is now the folder name (or "Selected Project Folder" if undetermined)
+      selectedRepo, 
       repoOverview,
       tapBap,
       fileTypes,
@@ -125,11 +96,6 @@ export default function CreatePage() {
     setFileTypes('');
     setExcludeFolders('');
     setAdditionalInfoList([]);
-    // Reset file input visually (optional, browser-dependent)
-    const fileInput = document.getElementById('project-folder-input') as HTMLInputElement;
-    if (fileInput) {
-      fileInput.value = '';
-    }
     console.log("Form cleared.");
   };
 
@@ -142,29 +108,22 @@ export default function CreatePage() {
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-6">
-          {/* Row 2: Select Project Folder */}
+          {/* Row 2: Select Project Folder Path */}
           <div className="space-y-2">
-            <Label htmlFor="project-folder-input" className="text-base font-semibold">Select Project Folder</Label>
-            {/* Note: The text of the button part of a file input (e.g., "Choose File") is browser-controlled and cannot be changed directly. 
-                We use attributes like 'webkitdirectory' to suggest folder selection to the browser. */}
+            <Label htmlFor="project-folder-path-input" className="text-base font-semibold">Project Folder Path</Label>
             <Input
-              id="project-folder-input"
-              type="file"
-              // @ts-ignore because `webkitdirectory` is not in standard HTMLInputElement props
-              webkitdirectory="true" 
-              directory="true" // Standard attribute for directory selection (less browser support than webkitdirectory)
-              onChange={handleFolderSelect}
-              className="text-base py-3 h-14 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-primary file:text-primary-foreground hover:file:bg-primary/90"
-              // This placeholder is shown when no folder is selected.
-              // After selection, the browser updates the input's display, typically with the folder name or file count.
-              placeholder="No project folder selected"
+              id="project-folder-path-input"
+              type="text"
+              value={selectedRepo}
+              onChange={handlePathChange}
+              placeholder="Enter the full path to your project folder (e.g., /Users/yourname/projects/my-app)"
+              className="text-base py-3 h-14"
             />
-            {/* This paragraph provides a consistent display of the selected folder's name or a default message. */}
-            <p className="text-sm text-muted-foreground mt-1">
-              {selectedRepo 
-                ? <>Selected folder: <span className="font-medium text-foreground">{selectedRepo}</span></>
-                : "No project folder selected."}
-            </p>
+            {selectedRepo && (
+              <p className="text-sm text-muted-foreground mt-1">
+                Entered path: <span className="font-medium text-foreground">{selectedRepo}</span>
+              </p>
+            )}
           </div>
 
           {/* Row 3: Sub-heading */}
