@@ -23,4 +23,4 @@ def get_repos():
 if __name__ == '__main__':
     # You can specify the port for your Flask app, e.g., 5001
     # Make sure this port is different from your Next.js app's port (e.g., 9002)
-    app.run(debug=True, port=5001)
+    app.run(host='127.0.0.1', port=5001, debug=True)
