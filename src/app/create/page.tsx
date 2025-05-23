@@ -7,7 +7,6 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-// Removed Select components as they are no longer used for repo selection here
 import { Textarea } from '@/components/ui/textarea';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogTrigger, DialogClose } from '@/components/ui/dialog';
 import { ArrowLeft, PlusSquare, PlusCircle, Edit, Trash2 } from 'lucide-react';
@@ -139,7 +138,7 @@ export default function CreatePage() {
               webkitdirectory="true" 
               directory="true" // More standard but less supported attempt for directory selection
               onChange={handleFolderSelect}
-              className="text-base file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-primary file:text-primary-foreground hover:file:bg-primary/90"
+              className="text-base py-3 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-primary file:text-primary-foreground hover:file:bg-primary/90"
               placeholder="No folder selected"
             />
             {selectedRepo && (
