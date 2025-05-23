@@ -2,7 +2,8 @@
 "use client";
 
 import Link from 'next/link';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -27,6 +28,7 @@ interface AdditionalInfoItem {
 }
 
 export default function EditPage() {
+  const searchParams = useSearchParams();
   const [selectedRepo, setSelectedRepo] = useState<string>('');
   const [repoOverview, setRepoOverview] = useState<string>('');
   const [tapBap, setTapBap] = useState<string>('');
@@ -39,8 +41,20 @@ export default function EditPage() {
   const [currentInfoDescription, setCurrentInfoDescription] = useState<string>('');
   const [editingId, setEditingId] = useState<string | null>(null);
 
-  // In a real application, you would fetch and pre-fill this data
-  // For example, using useEffect and a fetch call if an ID is passed in the route
+  useEffect(() => {
+    const repoIdFromQuery = searchParams.get('repoId');
+    if (repoIdFromQuery && repositories.find(repo => repo.id === repoIdFromQuery)) {
+      setSelectedRepo(repoIdFromQuery);
+      // In a real application, you would fetch and pre-fill all other data for this repoId
+      // For now, we are only pre-selecting the repository.
+      // Example:
+      // setRepoOverview(`Overview for ${repoIdFromQuery}`);
+      // setTapBap(`TAP/BAP for ${repoIdFromQuery}`);
+      // setFileTypes('.ts,.tsx');
+      // setExcludeFolders('node_modules');
+      // setAdditionalInfoList([{id: '1', title: 'Sample Info', description: 'Details for sample info'}]);
+    }
+  }, [searchParams]);
 
   const openModalForAdd = () => {
     setEditingId(null);
@@ -99,7 +113,10 @@ export default function EditPage() {
   };
 
   const handleDeleteTutor = () => {
-    // In a real app, you'd confirm with the user and then send a request to delete this tutor
+    if (!selectedRepo) {
+      alert("Please select a repository to delete.");
+      return;
+    }
     if (confirm("Are you sure you want to delete this Self Tutor configuration? This action cannot be undone.")) {
         console.log("Deleting self tutor configuration for repo:", selectedRepo);
         alert("Self Tutor configuration deletion initiated.");
@@ -111,7 +128,13 @@ export default function EditPage() {
   const handleClearForm = () => {
     // For an edit page, "Clear Form" might reset to original loaded values or empty if not applicable
     // For now, it will behave like the create page and clear all fields
-    setSelectedRepo('');
+    // setSelectedRepo(''); // Do not clear selected repo if passed by query, or reset to it.
+    const repoIdFromQuery = searchParams.get('repoId');
+    if (repoIdFromQuery && repositories.find(repo => repo.id === repoIdFromQuery)) {
+         setSelectedRepo(repoIdFromQuery); // Reset to initial if it was passed
+    } else {
+        setSelectedRepo(''); // Clear if no initial repo was passed or it's invalid
+    }
     setRepoOverview('');
     setTapBap('');
     setFileTypes('');
@@ -131,9 +154,9 @@ export default function EditPage() {
         <CardContent className="space-y-6">
           {/* Row 2: Select Repo */}
           <div className="space-y-2">
-            <Label htmlFor="repo-select" className="text-base font-semibold">Select Repository</Label>
+            <Label htmlFor="repo-select-edit" className="text-base font-semibold">Select Repository</Label>
             <Select value={selectedRepo} onValueChange={setSelectedRepo}>
-              <SelectTrigger id="repo-select" className="w-full text-base py-2.5">
+              <SelectTrigger id="repo-select-edit" className="w-full text-base py-2.5">
                 <SelectValue placeholder="Choose a repository..." />
               </SelectTrigger>
               <SelectContent>
@@ -157,7 +180,7 @@ export default function EditPage() {
               placeholder="Describe the repository, its purpose, key technologies, etc."
               value={repoOverview}
               onChange={(e) => setRepoOverview(e.target.value)}
-              className="w-full min-h-[12rem] text-base" // Approx 6-8 lines
+              className="w-full min-h-[12rem] text-base"
             />
           </div>
 
@@ -290,7 +313,4 @@ export default function EditPage() {
       </Card>
     </main>
   );
-
-    
-
-    
+}
