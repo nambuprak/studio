@@ -34,28 +34,31 @@ export default function CreatePage() {
     const files = event.target.files;
     if (files && files.length > 0) {
       let displayName = '';
-      // Attempt to get folder name from event.target.value (works in some browsers like Chrome)
-      // This path often looks like "C:\fakepath\FolderName"
-      const pathValue = event.target.value;
+      const pathValue = event.target.value; // e.g., C:\fakepath\FolderName
+
       if (pathValue) {
-          const parts = pathValue.split(/[\\/]/);
-          displayName = parts[parts.length - 1]; // This should be the folder name
+        // Primarily for Chrome-like browsers that provide a 'fakepath' with the folder name
+        const parts = pathValue.split(/[\\/]/);
+        displayName = parts[parts.length - 1];
       } else if (files[0].webkitRelativePath) {
-        // Fallback to webkitRelativePath if available (e.g., "FolderName/file.txt")
-        // Extract the first part which should be the folder name
+        // For browsers that provide relative paths for files within the folder
+        // e.g., "FolderName/file.txt" -> "FolderName"
         displayName = files[0].webkitRelativePath.split('/')[0];
       } else if (files.length === 1 && files[0].name && files[0].size === 0 && files[0].type === "") {
-        // Fallback for selecting an empty folder in some browsers
-         displayName = files[0].name;
-      } else if (files.length > 0 && files[0].name) {
-        // As a last resort, if only one file is selected and it might be the folder itself (less reliable)
-        // or if webkitdirectory is not fully supported and it falls back to file selection.
+        // Special case for selecting an empty folder in some browsers.
+        // files[0].name is the actual folder name.
         displayName = files[0].name;
       } else {
-        displayName = "Selected Folder"; // Generic fallback
+        // If the above methods fail, we cannot reliably determine the folder name
+        // from the File API for a non-empty folder.
+        // `files[0].name` would be the name of the first file, not the folder.
+        // The browser might display "X files" in the input field itself.
+        // We'll use a generic name for our separate display.
+        displayName = "Selected Project Folder";
       }
       setSelectedRepo(displayName);
     } else {
+      // No files selected or selection cancelled
       setSelectedRepo('');
     }
   };
@@ -100,12 +103,12 @@ export default function CreatePage() {
   };
   
   const handleGenerate = () => {
-    if (!selectedRepo.trim()) {
+    if (!selectedRepo.trim() || selectedRepo === "Selected Project Folder") {
       alert("Please select a project folder.");
       return;
     }
     console.log("Generating self tutor with data:", {
-      selectedRepo, // This is now the folder name
+      selectedRepo, // This is now the folder name (or "Selected Project Folder" if undetermined)
       repoOverview,
       tapBap,
       fileTypes,
