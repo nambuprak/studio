@@ -67,9 +67,13 @@ function EditPageContent() {
         }
 
       } catch (error) {
-        console.error("Failed to fetch repositories:", error);
+        console.error("Failed to fetch repositories for edit page:", error);
         setRepositories([]);
-        alert("Could not fetch repositories for the edit page. Make sure the Flask API server is running on port 5001.");
+        let errorMessage = "Could not fetch repositories for the edit page. Make sure the Flask API server is running on port 5001.";
+        if (error instanceof Error) {
+          errorMessage += `\nDetails: ${error.message}`;
+        }
+        alert(errorMessage);
       }
     }
     fetchRepositories();
@@ -183,7 +187,7 @@ function EditPageContent() {
                   ))
                 ) : (
                   <SelectItem value="loading" disabled className="text-base">
-                    Loading repositories...
+                     {repositories.length === 0 && !selectedRepo ? "Failed to load. Is the API server running?" : "Loading repositories..."}
                   </SelectItem>
                 )}
               </SelectContent>

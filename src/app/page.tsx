@@ -31,9 +31,12 @@ export default function HomePage() {
         setRepositories(data);
       } catch (error) {
         console.error("Failed to fetch repositories:", error);
-        // Fallback to empty or display an error message
         setRepositories([]);
-        alert("Could not fetch repositories. Make sure the Flask API server is running on port 5001.");
+        let errorMessage = "Could not fetch repositories. Make sure the Flask API server is running on port 5001.";
+        if (error instanceof Error) {
+          errorMessage += `\nDetails: ${error.message}`;
+        }
+        alert(errorMessage);
       }
     }
     fetchRepositories();
@@ -76,7 +79,7 @@ export default function HomePage() {
                   ))
                 ) : (
                   <SelectItem value="loading" disabled className="text-base">
-                    Loading repositories...
+                    {repositories.length === 0 && !selectedRepoId ? "Failed to load. Is the API server running?" : "Loading repositories..."}
                   </SelectItem>
                 )}
               </SelectContent>
