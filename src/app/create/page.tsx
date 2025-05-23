@@ -34,31 +34,27 @@ export default function CreatePage() {
     const files = event.target.files;
     if (files && files.length > 0) {
       let displayName = '';
-      // The presence of webkitRelativePath (even as an empty string for files in the root of the selected dir)
-      // is a strong indicator that a directory was selected.
-      // files[0].type === "" can also be an indicator for folder selection in some browsers.
-      const isDirectoryMode = files[0].webkitRelativePath !== undefined || (files[0].type === "" && files.length === 1);
-
-      if (isDirectoryMode) {
-        // In directory mode, event.target.value often contains the path ending with the directory name.
-        // e.g., "C:\fakepath\MySelectedFolder"
-        const pathValue = event.target.value;
-        if (pathValue) {
+      // Attempt to get folder name from event.target.value (works in some browsers like Chrome)
+      // This path often looks like "C:\fakepath\FolderName"
+      const pathValue = event.target.value;
+      if (pathValue) {
           const parts = pathValue.split(/[\\/]/);
           displayName = parts[parts.length - 1];
-        } else {
-          // Fallback if pathValue is somehow empty but we are in directory mode.
-          // This case is less common. We might try to use the name of the first "file"
-          // if it seems to represent the folder itself (e.g., for an empty folder).
-          if (files.length === 1 && files[0].name && files[0].size === 0 && files[0].type === "") {
-              displayName = files[0].name; // Potentially the name of an empty selected folder
-          } else {
-              displayName = "Selected Folder"; // Generic name if we can't determine
-          }
-        }
+      } else if (files[0].webkitRelativePath) {
+        // Fallback to webkitRelativePath if available (e.g., "FolderName/file.txt")
+        // Extract the first part which should be the folder name
+        displayName = files[0].webkitRelativePath.split('/')[0];
+      } else if (files.length === 1 && files[0].name && files[0].size === 0 && files[0].type === "") {
+        // Fallback for selecting an empty folder in some browsers
+         displayName = files[0].name;
+      } else if (files.length > 0 && files[0].name) {
+        // As a last resort, if only one file is selected and it might be the folder itself (less reliable)
+        // or if webkitdirectory is not fully supported and it falls back to file selection.
+        // This case is tricky, as it could just be a single file.
+        // We'll assume if webkitdirectory was intended, it's the name of the "entry point" if it's one file.
+        displayName = files[0].name; 
       } else {
-        // Not in directory mode (likely a single file was selected, or browser doesn't support webkitdirectory)
-        displayName = files[0].name;
+        displayName = "Selected Folder"; // Generic fallback
       }
       setSelectedRepo(displayName);
     } else {
@@ -155,7 +151,7 @@ export default function CreatePage() {
               webkitdirectory="true" 
               directory="true" // More standard but less supported attempt for directory selection
               onChange={handleFolderSelect}
-              className="text-base py-3 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-primary file:text-primary-foreground hover:file:bg-primary/90"
+              className="text-base py-3 h-14 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-primary file:text-primary-foreground hover:file:bg-primary/90"
               placeholder="No folder selected"
             />
             {selectedRepo && (
