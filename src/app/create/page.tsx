@@ -18,7 +18,7 @@ interface AdditionalInfoItem {
 }
 
 export default function CreatePage() {
-  const [selectedRepo, setSelectedRepo] = useState<string>(''); // Will now store the selected folder name
+  const [selectedRepo, setSelectedRepo] = useState<string>(''); // Stores the selected folder name
   const [repoOverview, setRepoOverview] = useState<string>('');
   const [tapBap, setTapBap] = useState<string>('');
   const [fileTypes, setFileTypes] = useState<string>('');
@@ -39,7 +39,7 @@ export default function CreatePage() {
       const pathValue = event.target.value;
       if (pathValue) {
           const parts = pathValue.split(/[\\/]/);
-          displayName = parts[parts.length - 1];
+          displayName = parts[parts.length - 1]; // This should be the folder name
       } else if (files[0].webkitRelativePath) {
         // Fallback to webkitRelativePath if available (e.g., "FolderName/file.txt")
         // Extract the first part which should be the folder name
@@ -50,9 +50,7 @@ export default function CreatePage() {
       } else if (files.length > 0 && files[0].name) {
         // As a last resort, if only one file is selected and it might be the folder itself (less reliable)
         // or if webkitdirectory is not fully supported and it falls back to file selection.
-        // This case is tricky, as it could just be a single file.
-        // We'll assume if webkitdirectory was intended, it's the name of the "entry point" if it's one file.
-        displayName = files[0].name; 
+        displayName = files[0].name;
       } else {
         displayName = "Selected Folder"; // Generic fallback
       }
@@ -144,21 +142,26 @@ export default function CreatePage() {
           {/* Row 2: Select Project Folder */}
           <div className="space-y-2">
             <Label htmlFor="project-folder-input" className="text-base font-semibold">Select Project Folder</Label>
+            {/* Note: The text of the button part of a file input (e.g., "Choose File") is browser-controlled and cannot be changed directly. 
+                We use attributes like 'webkitdirectory' to suggest folder selection to the browser. */}
             <Input
               id="project-folder-input"
               type="file"
               // @ts-ignore because `webkitdirectory` is not in standard HTMLInputElement props
               webkitdirectory="true" 
-              directory="true" // More standard but less supported attempt for directory selection
+              directory="true" // Standard attribute for directory selection (less browser support than webkitdirectory)
               onChange={handleFolderSelect}
               className="text-base py-3 h-14 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-primary file:text-primary-foreground hover:file:bg-primary/90"
-              placeholder="No folder selected"
+              // This placeholder is shown when no folder is selected.
+              // After selection, the browser updates the input's display, typically with the folder name or file count.
+              placeholder="No project folder selected"
             />
-            {selectedRepo && (
-              <p className="text-sm text-muted-foreground mt-1">
-                Selected: <span className="font-medium text-foreground">{selectedRepo}</span>
-              </p>
-            )}
+            {/* This paragraph provides a consistent display of the selected folder's name or a default message. */}
+            <p className="text-sm text-muted-foreground mt-1">
+              {selectedRepo 
+                ? <>Selected folder: <span className="font-medium text-foreground">{selectedRepo}</span></>
+                : "No project folder selected."}
+            </p>
           </div>
 
           {/* Row 3: Sub-heading */}
