@@ -22,8 +22,8 @@ export default function HomePage() {
   useEffect(() => {
     async function fetchRepositories() {
       try {
-        // Ensure your Flask server is running on port 5001 (or the port you configured)
-        const response = await fetch('http://localhost:5001/api/repos');
+        // Fetch from the relative path, Next.js dev server will proxy this
+        const response = await fetch('/api/repos');
         if (!response.ok) {
           throw new Error(`HTTP error! status: ${response.status}`);
         }
@@ -32,8 +32,8 @@ export default function HomePage() {
       } catch (error) {
         console.error("Failed to fetch repositories:", error);
         setRepositories([]);
-        let errorMessage = "Could not fetch repositories. Make sure the Flask API server is running on port 5001.";
-        if (error instanceof Error) {
+        let errorMessage = "Could not fetch repositories. Ensure the backend API server is running and accessible via /api/repos.";
+        if (error instanceof Error && error.message) {
           errorMessage += `\nDetails: ${error.message}`;
         }
         alert(errorMessage);
@@ -79,7 +79,7 @@ export default function HomePage() {
                   ))
                 ) : (
                   <SelectItem value="loading" disabled className="text-base">
-                    {repositories.length === 0 && !selectedRepoId ? "Failed to load. Is the API server running?" : "Loading repositories..."}
+                    { "Failed to load or no repositories. Is the API server running?"}
                   </SelectItem>
                 )}
               </SelectContent>

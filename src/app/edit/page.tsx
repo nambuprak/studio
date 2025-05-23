@@ -42,7 +42,8 @@ function EditPageContent() {
   useEffect(() => {
     async function fetchRepositories() {
       try {
-        const response = await fetch('http://localhost:5001/api/repos');
+        // Fetch from the relative path, Next.js dev server will proxy this
+        const response = await fetch('/api/repos');
         if (!response.ok) {
           throw new Error(`HTTP error! status: ${response.status}`);
         }
@@ -55,7 +56,7 @@ function EditPageContent() {
           // In a real application, you would fetch and pre-fill all other form data for this repoId
           // For now, we are only pre-selecting the repository.
           // Example:
-          // const selectedRepoData = await fetch(`http://localhost:5001/api/repo-details/${repoIdFromQuery}`);
+          // const selectedRepoData = await fetch(`/api/repo-details/${repoIdFromQuery}`); // Note: uses relative path
           // const repoDetails = await selectedRepoData.json();
           // setRepoOverview(repoDetails.overview);
           // setTapBap(repoDetails.tapBap);
@@ -69,8 +70,8 @@ function EditPageContent() {
       } catch (error) {
         console.error("Failed to fetch repositories for edit page:", error);
         setRepositories([]);
-        let errorMessage = "Could not fetch repositories for the edit page. Make sure the Flask API server is running on port 5001.";
-        if (error instanceof Error) {
+        let errorMessage = "Could not fetch repositories for the edit page. Ensure the backend API server is running and accessible via /api/repos.";
+        if (error instanceof Error && error.message) {
           errorMessage += `\nDetails: ${error.message}`;
         }
         alert(errorMessage);
@@ -132,7 +133,8 @@ function EditPageContent() {
       excludeFolders,
       additionalInfoList,
     });
-    alert("Self Tutor update initiated (see console for data). This would call a PUT/POST to your Flask API.");
+    // Example: await fetch(`/api/repo/${selectedRepo}`, { method: 'PUT', body: JSON.stringify(data) });
+    alert("Self Tutor update initiated (see console for data). This would call a PUT/POST to your Flask API via a relative /api path.");
   };
 
   const handleDeleteTutor = () => {
@@ -142,8 +144,8 @@ function EditPageContent() {
     }
     if (confirm("Are you sure you want to delete this Self Tutor configuration? This action cannot be undone.")) {
         console.log("Deleting self tutor configuration for repo:", selectedRepo);
-        alert("Self Tutor configuration deletion initiated. This would call a DELETE to your Flask API.");
-        // Potentially navigate away or clear form
+        // Example: await fetch(`/api/repo/${selectedRepo}`, { method: 'DELETE' });
+        alert("Self Tutor configuration deletion initiated. This would call a DELETE to your Flask API via a relative /api path.");
         handleClearForm();
     }
   };
@@ -187,7 +189,7 @@ function EditPageContent() {
                   ))
                 ) : (
                   <SelectItem value="loading" disabled className="text-base">
-                     {repositories.length === 0 && !selectedRepo ? "Failed to load. Is the API server running?" : "Loading repositories..."}
+                     { "Failed to load or no repositories. Is the API server running?"}
                   </SelectItem>
                 )}
               </SelectContent>
