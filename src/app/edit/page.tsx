@@ -82,6 +82,10 @@ export default function EditPage() {
   };
   
   const handleUpdate = () => {
+    if (!selectedRepo) {
+      alert("Please select a repository before updating.");
+      return;
+    }
     // In a real app, you'd send this data to a backend to update the existing tutor
     console.log("Updating self tutor with data:", {
       selectedRepo,
@@ -286,5 +290,7 @@ export default function EditPage() {
       </Card>
     </main>
   );
+
+    
 
     
