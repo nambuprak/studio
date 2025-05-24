@@ -89,6 +89,10 @@ export default function CreatePage() {
     }
     setIsLoading(true);
 
+    if (inputType === 'url' && embedRepo) {
+        alert("Processing a repository URL with embedding enabled can take some time. The page will be unresponsive until the server completes the operation. Please be patient.");
+    }
+    
     const payload = {
       input_type: inputType,
       source_location: sourceLocation,
@@ -96,16 +100,11 @@ export default function CreatePage() {
       tap_bap: tapBap,
       file_types: fileTypes,
       exclude_folders: excludeFolders,
-      additional_info_list: additionalInfoList.map(({ id, ...rest }) => rest), // Exclude client-side id
+      additional_info_list: additionalInfoList.map(({ id, ...rest }) => rest), 
       embed_repo: embedRepo,
     };
 
     try {
-      // Note: Standard fetch has browser-specific timeouts (e.g., ~2-5 minutes).
-      // For very long operations (like large repo cloning + embedding), 
-      // a more robust solution involves asynchronous task processing on the server 
-      // and client-side polling or WebSockets for updates.
-      // This current setup will wait for the server to complete its entire process.
       const response = await fetch('/api/analyze-repo', {
         method: 'POST',
         headers: {
