@@ -16,3 +16,4 @@ chromadb
 flask
 flask-cors
 GitPython
+requests
