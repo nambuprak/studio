@@ -5,16 +5,16 @@ import json
 DATABASE_URL = "self_tutor.db" # Relative to where app.py is run (server folder)
 
 def get_db_connection():
-    conn = sqlite3.connect(DATABASE_URL)
+    conn = sqlite3.connect(DATABASE_URL) # SQLite creates the file if it doesn't exist
     conn.row_factory = sqlite3.Row
     return conn
 
 def init_db():
     conn = get_db_connection()
     cursor = conn.cursor()
-    # Drop table if exists to apply schema changes easily for POC. 
-    # In production, use migrations.
-    cursor.execute("DROP TABLE IF EXISTS tutors") 
+    # Removed: cursor.execute("DROP TABLE IF EXISTS tutors")
+    # This ensures the table is created if it doesn't exist,
+    # and preserves existing data if the table is already there.
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS tutors (
             id TEXT PRIMARY KEY,
@@ -32,7 +32,8 @@ def init_db():
     ''')
     conn.commit()
     conn.close()
-    print("Database initialized (tutors table created/recreated).")
+    # Updated print statement for clarity
+    print("Database initialization complete. 'tutors' table ensured to exist.")
 
 def save_tutor_config(tutor_id: str, project_name: str, input_type: str, source_location: str,
                         repo_overview: str, tap_bap: str, file_types_str: str,
@@ -59,6 +60,7 @@ def save_tutor_config(tutor_id: str, project_name: str, input_type: str, source_
         conn.commit()
     except sqlite3.Error as e:
         conn.rollback()
+        print(f"Error during save_tutor_config: {e}") # Added print for debugging
         raise e # Re-raise the exception to be caught by the caller
     finally:
         conn.close()
@@ -66,15 +68,22 @@ def save_tutor_config(tutor_id: str, project_name: str, input_type: str, source_
 def get_all_tutors() -> list:
     conn = get_db_connection()
     cursor = conn.cursor()
-    # Return 'name' aliased as project_name for frontend compatibility
-    cursor.execute("SELECT id, project_name as name FROM tutors ORDER BY created_at DESC")
-    repos = cursor.fetchall()
-    conn.close()
-    return [dict(row) for row in repos]
+    try:
+        # Return 'name' aliased as project_name for frontend compatibility
+        # Also selecting source_location and input_type as they might be useful later for display
+        cursor.execute("SELECT id, project_name as name, source_location, input_type FROM tutors ORDER BY created_at DESC")
+        repos = cursor.fetchall()
+        return [dict(row) for row in repos]
+    except sqlite3.Error as e:
+        print(f"Error during get_all_tutors: {e}") # Added print for debugging
+        # If the table doesn't exist, this is where "no such table" would occur.
+        # init_db() should prevent this.
+        return [] # Return empty list on error
+    finally:
+        conn.close()
 
 # Ensure DB is initialized when this module is loaded if app.py doesn't call it explicitly.
 # However, it's better practice to call init_db() from the main app startup.
-# For this structure, app.py already calls init_db(), so this line can be removed or commented.
-# init_db() 
-
-    
+# app.py already calls init_db(), so this line is usually not strictly needed here
+# but doesn't harm if called multiple times with "CREATE TABLE IF NOT EXISTS".
+# init_db()
