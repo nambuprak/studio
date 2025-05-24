@@ -9,7 +9,8 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogTrigger, DialogClose } from '@/components/ui/dialog';
-import { ArrowLeft, PlusSquare, PlusCircle, Edit, Trash2 } from 'lucide-react';
+import { Checkbox } from "@/components/ui/checkbox";
+import { ArrowLeft, PlusSquare, PlusCircle, Edit, Trash2, Loader2 } from 'lucide-react';
 
 interface AdditionalInfoItem {
   id: string;
@@ -23,6 +24,8 @@ export default function CreatePage() {
   const [tapBap, setTapBap] = useState<string>('');
   const [fileTypes, setFileTypes] = useState<string>('');
   const [excludeFolders, setExcludeFolders] = useState<string>('');
+  const [embedRepo, setEmbedRepo] = useState<boolean>(false);
+  const [isLoading, setIsLoading] = useState<boolean>(false);
 
   const [additionalInfoList, setAdditionalInfoList] = useState<AdditionalInfoItem[]>([]);
   const [isModalOpen, setIsModalOpen] = useState<boolean>(false);
@@ -53,7 +56,7 @@ export default function CreatePage() {
 
   const handleSaveAdditionalInfo = () => {
     if (!currentInfoTitle.trim()) {
-      alert("Title cannot be empty."); // Simple validation
+      alert("Title cannot be empty.");
       return;
     }
     if (editingId) {
@@ -73,22 +76,47 @@ export default function CreatePage() {
     setAdditionalInfoList(additionalInfoList.filter(item => item.id !== id));
   };
   
-  const handleGenerate = () => {
+  const handleGenerate = async () => {
     if (!selectedRepo.trim()) {
       alert("Please enter the repository URL.");
       return;
     }
-    // In a real application, you would send this data to your Flask backend.
-    // The backend would then clone the repo, process files, etc.
-    console.log("Generating self tutor with data:", {
-      selectedRepo, // This is now a URL
-      repoOverview,
-      tapBap,
-      fileTypes,
-      excludeFolders,
-      additionalInfoList,
-    });
-    alert("Self Tutor generation initiated (see console for data). Backend would handle repo cloning.");
+    setIsLoading(true);
+
+    const payload = {
+      repo_url: selectedRepo,
+      repo_overview: repoOverview,
+      tap_bap: tapBap,
+      file_types: fileTypes,
+      exclude_folders: excludeFolders,
+      additional_info_list: additionalInfoList.map(({ title, description }) => ({ title, description })),
+      embed_repo: embedRepo,
+    };
+
+    try {
+      const response = await fetch('/api/analyze-repo', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload),
+      });
+
+      const result = await response.json();
+
+      if (!response.ok) {
+        throw new Error(result.error || `Server error: ${response.status}`);
+      }
+
+      alert(`Self Tutor created successfully!\nProject Name: ${result.project_name}\nTutor ID: ${result.tutor_id}\nFiles processed: ${result.discovered_files_count !== undefined ? result.discovered_files_count : 'N/A (Embedding skipped)'}`);
+      // Optionally, clear form or redirect
+      // handleClearForm(); 
+    } catch (error: any) {
+      console.error("Failed to generate Self Tutor:", error);
+      alert(`Failed to generate Self Tutor: ${error.message}`);
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   const handleClearForm = () => {
@@ -97,6 +125,7 @@ export default function CreatePage() {
     setTapBap('');
     setFileTypes('');
     setExcludeFolders('');
+    setEmbedRepo(false);
     setAdditionalInfoList([]);
     console.log("Form cleared.");
   };
@@ -110,7 +139,6 @@ export default function CreatePage() {
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-6">
-          {/* Row 2: Input for Repository URL */}
           <div className="space-y-2">
             <Label htmlFor="repository-url-input" className="text-base font-semibold">Repository URL</Label>
             <Input
@@ -128,10 +156,7 @@ export default function CreatePage() {
             )}
           </div>
 
-          {/* Row 3: Sub-heading */}
           <h2 className="text-xl font-semibold text-foreground pt-2">Provide a Repo Overview</h2>
-
-          {/* Row 4: Textarea for Repo Overview */}
           <div className="space-y-2">
             <Label htmlFor="repo-overview" className="sr-only">Repository Overview</Label>
             <Textarea
@@ -143,7 +168,6 @@ export default function CreatePage() {
             />
           </div>
 
-          {/* Row 5: TAP / BAP */}
           <div className="space-y-2">
             <Label htmlFor="tap-bap" className="text-base font-semibold">TAP / BAP</Label>
             <Input
@@ -155,7 +179,6 @@ export default function CreatePage() {
             />
           </div>
 
-          {/* Row 6: File Types */}
           <div className="space-y-2">
             <Label htmlFor="file-types" className="text-base font-semibold">File Types (comma-separated)</Label>
             <Input
@@ -167,7 +190,6 @@ export default function CreatePage() {
             />
           </div>
 
-          {/* Row 7: Exclude Folders */}
           <div className="space-y-2">
             <Label htmlFor="exclude-folders" className="text-base font-semibold">Exclude Folders (comma-separated)</Label>
             <Input
@@ -179,7 +201,6 @@ export default function CreatePage() {
             />
           </div>
 
-          {/* Row 8: Additional Info Section */}
           <div className="space-y-4 pt-4 border-t">
             <h3 className="text-lg font-semibold text-foreground">Additional Specific Details</h3>
             <Dialog open={isModalOpen} onOpenChange={setIsModalOpen}>
@@ -249,18 +270,25 @@ export default function CreatePage() {
             )}
           </div>
 
-          {/* Row 9: Action Buttons */}
-          <div className="flex flex-col sm:flex-row justify-end space-y-3 sm:space-y-0 sm:space-x-3 pt-6 border-t mt-6">
+          <div className="items-center flex space-x-2 pt-4 border-t mt-4">
+            <Checkbox id="embed-repo" checked={embedRepo} onCheckedChange={(checked) => setEmbedRepo(Boolean(checked))} />
+            <Label htmlFor="embed-repo" className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">
+              Embed Repository Content (clones and processes files server-side)
+            </Label>
+          </div>
+
+          <div className="flex flex-col sm:flex-row justify-end space-y-3 sm:space-y-0 sm:space-x-3 pt-6 border-t mt-2">
              <Link href="/" passHref legacyBehavior>
-              <Button variant="outline" size="lg" className="w-full sm:w-auto">
+              <Button variant="outline" size="lg" className="w-full sm:w-auto" disabled={isLoading}>
                 <ArrowLeft className="mr-2 h-5 w-5" /> Go Home
               </Button>
             </Link>
-            <Button variant="destructive" size="lg" onClick={handleClearForm} className="w-full sm:w-auto">
+            <Button variant="destructive" size="lg" onClick={handleClearForm} className="w-full sm:w-auto" disabled={isLoading}>
               Clear Form
             </Button>
-            <Button size="lg" onClick={handleGenerate} className="w-full sm:w-auto">
-              Generate Self Tutor
+            <Button size="lg" onClick={handleGenerate} className="w-full sm:w-auto" disabled={isLoading}>
+              {isLoading && <Loader2 className="mr-2 h-5 w-5 animate-spin" />}
+              {isLoading ? "Generating..." : "Generate Self Tutor"}
             </Button>
           </div>
         </CardContent>
