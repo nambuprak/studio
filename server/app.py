@@ -15,6 +15,7 @@ app = Flask(__name__)
 CORS(app)
 
 # Initialize database on startup
+# This ensures the DB file and 'tutors' table are created if they don't exist.
 init_db()
 
 # --- Pydantic Models ---
@@ -60,7 +61,7 @@ def analyze_repo_route():
         data = CreateTutorInput(**request.json)
     except ValidationError as e:
         return jsonify({"error": "Invalid input", "details": e.errors()}), 400
-    except Exception as e:
+    except Exception as e: # Catch other potential errors during request parsing
         print(f"Error parsing request: {e}")
         return jsonify({"error": f"Error parsing request JSON: {str(e)}"}), 400
 
@@ -114,10 +115,12 @@ def analyze_repo_route():
             analysis_result["embedding_error"] = str(e)
             # Configuration is saved, but embedding failed.
             analysis_result["message"] = "Self Tutor configuration saved, but repository/folder processing failed."
-            analysis_result["discovered_files_count"] = 0
+            # Ensure discovered_files_count is always present, even if 0
+            analysis_result["discovered_files_count"] = 0 
     else:
         print("Repository/folder embedding skipped by user.")
         analysis_result["discovered_files_count"] = "N/A (Embedding skipped)"
+
 
     return jsonify(analysis_result), 200
 

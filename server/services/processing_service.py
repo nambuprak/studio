@@ -41,12 +41,11 @@ def _process_files_in_directory(directory_path: str, file_types_str: str, exclud
 
     for root, dirs, files in os.walk(directory_path, topdown=True):
         # --- Directory Exclusion Logic ---
-        original_dirs_count = len(dirs)
-        
         # Filter dirs in place (iterate over a copy for safe modification)
         dirs_to_remove = set()
         for d_name in list(dirs): # Iterate over a copy
             dir_path_full = os.path.join(root, d_name)
+            # For .gitignore matching, we need path relative to the directory_path (walk root)
             dir_path_relative_to_walk_root = os.path.relpath(dir_path_full, directory_path)
             
             # 1. Exclude based on user's `exclude_folders_str` (applies to directory names only)
@@ -55,13 +54,15 @@ def _process_files_in_directory(directory_path: str, file_types_str: str, exclud
                 # print(f"Excluding dir (user list): {dir_path_relative_to_walk_root}")
                 continue
             
-            # 2. Exclude hidden directories (like .git, .vscode)
-            if d_name.startswith('.'): 
+            # 2. Exclude hidden directories (like .git, .vscode) - typically we want to exclude .git for processing
+            if d_name.startswith('.'): # and d_name != '.git' if you wanted to specifically allow .git for some reason
                 dirs_to_remove.add(d_name)
                 # print(f"Excluding dir (hidden): {dir_path_relative_to_walk_root}")
                 continue
             
             # 3. If local folder walk, exclude based on .gitignore patterns (applies to relative paths from root of walk)
+            # Need to ensure path is correctly formatted for pathspec (usually relative paths)
+            # and directories matched by .gitignore often end with a slash in patterns.
             if gitignore_spec and gitignore_spec.match_file(dir_path_relative_to_walk_root + '/'): # Add trailing slash for directories
                 dirs_to_remove.add(d_name)
                 # print(f"Excluding dir (.gitignore): {dir_path_relative_to_walk_root}")
@@ -69,10 +70,6 @@ def _process_files_in_directory(directory_path: str, file_types_str: str, exclud
         
         dirs[:] = [d for d in dirs if d not in dirs_to_remove]
         
-        # if original_dirs_count != len(dirs):
-        # print(f"Dirs before filtering in '{root}': {original_dirs_count}, after: {len(dirs)}. Kept: {dirs}")
-
-
         # --- File Processing & Exclusion ---
         for file_name in files:
             file_path_full = os.path.join(root, file_name)
@@ -89,12 +86,12 @@ def _process_files_in_directory(directory_path: str, file_types_str: str, exclud
                 continue
 
             # 3. Include based on file_types_to_include
-            if not file_types_to_include: # If no types specified, include all (after .gitignore filtering)
+            if not file_types_to_include: # If no types specified, include all (after .gitignore and hidden file filtering)
                 processed_files_count += 1
                 # print(f"Processing file (all types): {file_path_full}")
             else:
                 _, ext = os.path.splitext(file_name)
-                if ext in file_types_to_include:
+                if ext.strip() in file_types_to_include: # Ensure extension check is also stripped if needed, though file_types_to_include should be clean
                     processed_files_count += 1
                     # print(f"Processing file (filtered type): {file_path_full}")
     
@@ -121,49 +118,71 @@ def process_repository_content(input_type: str, source_location: str,
         processing_message = "Self Tutor configuration saved and local folder processed."
 
     elif input_type == 'url':
-        # Use a unique temporary directory for cloning, relative to the script's location or a defined temp area
-        # For simplicity, creating it in the current working directory of the Flask app (server folder)
+        # Use a unique temporary directory for cloning
         temp_clone_dir = f"temp_repo_clone_{tutor_id}" 
-        
-        # Ensure the temp_clone_dir is an absolute path or a well-defined relative path
-        # If server/app.py is run from the project root, this will be project_root/temp_repo_clone_id
-        # If server/app.py is run from server/, this will be server/temp_repo_clone_id
-        # For more robustness, one might use tempfile.mkdtemp()
         
         if os.path.exists(temp_clone_dir):
             print(f"Cleaning up pre-existing temporary directory: {temp_clone_dir}")
             shutil.rmtree(temp_clone_dir)
         os.makedirs(temp_clone_dir, exist_ok=True)
         
+        repo = None
         try:
             print(f"Cloning repository: {source_location} into {temp_clone_dir}")
-            git.Repo.clone_from(source_location, temp_clone_dir) 
+            repo = git.Repo.clone_from(source_location, temp_clone_dir) 
             print("Repository cloned successfully.")
-            
-            # Process the cloned directory. .gitignore rules are implicitly handled by `git clone`.
-            # `is_local_folder_walk` is False because we are not reading a .gitignore from the cloned repo's root again.
-            # The `exclude_folders_str` and `file_types_str` from user input will apply to the cloned content.
+
+            # Attempt to checkout the default branch to ensure working directory is populated
+            try:
+                repo.git.checkout('HEAD') 
+                print(f"Checked out HEAD of the repository in {temp_clone_dir}")
+            except git.exc.GitCommandError as e_checkout:
+                print(f"Warning: Could not explicitly checkout HEAD after clone: {e_checkout}. Proceeding with current state.")
+            except Exception as e_general_checkout: # Catch other potential errors during checkout
+                print(f"Warning: An unexpected error occurred during checkout: {e_general_checkout}. Proceeding with current state.")
+
+            # Process the cloned directory.
+            # .gitignore rules are implicitly handled by `git clone` (files not tracked won't be cloned).
+            # `is_local_folder_walk` is False because we don't re-apply .gitignore logic to the cloned temp dir.
+            # User-defined exclude_folders_str and file_types_str will apply to the cloned content.
             discovered_files_count = _process_files_in_directory(temp_clone_dir, file_types_str, exclude_folders_str, is_local_folder_walk=False)
             processing_message = "Self Tutor configuration saved and repository processed."
 
-        except git.exc.GitCommandError as e:
-            print(f"Git cloning error: {e}")
-            error_details = e.stderr if hasattr(e, 'stderr') and e.stderr else str(e)
+        except git.exc.GitCommandError as e_clone:
+            print(f"Git cloning error: {e_clone}")
+            error_details = e_clone.stderr if hasattr(e_clone, 'stderr') and e_clone.stderr else str(e_clone)
             raise Exception(f"Failed to clone repository: {error_details}")
-        except Exception as e:
-            print(f"Error processing cloned repository: {e}")
-            raise Exception(f"An unexpected error occurred during repository processing: {str(e)}")
+        except Exception as e_process:
+            print(f"Error processing cloned repository: {e_process}")
+            raise Exception(f"An unexpected error occurred during repository processing: {str(e_process)}")
         finally:
             if os.path.exists(temp_clone_dir):
                 print(f"Cleaning up temporary directory: {temp_clone_dir}")
                 try:
+                    # Special handling for .git folder on Windows before rmtree
+                    if os.name == 'nt':
+                        for root, dirs, files in os.walk(temp_clone_dir):
+                            for d_name in dirs:
+                                if d_name == '.git':
+                                    git_dir_path = os.path.join(root, d_name)
+                                    # Attempt to remove read-only attributes from .git contents
+                                    for dirpath, dirnames, filenames in os.walk(git_dir_path):
+                                        for filename in filenames:
+                                            filepath = os.path.join(dirpath, filename)
+                                            try:
+                                                os.chmod(filepath, 0o777) # Set to read/write/execute for owner/group/others
+                                            except Exception as e_chmod:
+                                                print(f"Could not change permissions for {filepath}: {e_chmod}")
                     shutil.rmtree(temp_clone_dir)
                     print(f"Successfully removed {temp_clone_dir}")
+                except PermissionError as e_perm: # Specifically catch PermissionError
+                    print(f"PermissionError removing temporary directory {temp_clone_dir}: {e_perm}. Check for lingering processes or file locks.")
                 except Exception as e_rm:
                     print(f"Error removing temporary directory {temp_clone_dir}: {e_rm}")
             else:
-                print(f"Temporary directory {temp_clone_dir} not found for cleanup (might have failed before creation).")
+                print(f"Temporary directory {temp_clone_dir} not found for cleanup (might have failed before creation or during processing).")
     else:
         raise ValueError(f"Invalid input_type for processing: {input_type}")
         
     return discovered_files_count, processing_message
+

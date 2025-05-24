@@ -33,7 +33,7 @@ def init_db():
     conn.commit()
     conn.close()
     # Updated print statement for clarity
-    print("Database initialization complete. 'tutors' table ensured to exist.")
+    print(f"Database initialization complete: '{DATABASE_URL}' ensured to have 'tutors' table.")
 
 def save_tutor_config(tutor_id: str, project_name: str, input_type: str, source_location: str,
                         repo_overview: str, tap_bap: str, file_types_str: str,
@@ -73,6 +73,9 @@ def get_all_tutors() -> list:
         # Also selecting source_location and input_type as they might be useful later for display
         cursor.execute("SELECT id, project_name as name, source_location, input_type FROM tutors ORDER BY created_at DESC")
         repos = cursor.fetchall()
+        # If the table was just created and is empty, repos will be an empty list.
+        if not repos:
+            print("No tutors found in the database.")
         return [dict(row) for row in repos]
     except sqlite3.Error as e:
         print(f"Error during get_all_tutors: {e}") # Added print for debugging
