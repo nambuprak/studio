@@ -18,6 +18,9 @@ interface AdditionalInfoItem {
   description: string;
 }
 
+// Helper for generating simple client-side unique IDs
+const generateClientId = () => 'id-' + Date.now().toString(36) + Math.random().toString(36).substring(2);
+
 export default function CreatePage() {
   const [selectedRepo, setSelectedRepo] = useState<string>(''); // Stores the repository URL
   const [repoOverview, setRepoOverview] = useState<string>('');
@@ -64,7 +67,7 @@ export default function CreatePage() {
         item.id === editingId ? { ...item, title: currentInfoTitle, description: currentInfoDescription } : item
       ));
     } else {
-      setAdditionalInfoList([...additionalInfoList, { id: crypto.randomUUID(), title: currentInfoTitle, description: currentInfoDescription }]);
+      setAdditionalInfoList([...additionalInfoList, { id: generateClientId(), title: currentInfoTitle, description: currentInfoDescription }]);
     }
     setIsModalOpen(false);
     setCurrentInfoTitle('');

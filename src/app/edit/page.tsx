@@ -24,6 +24,9 @@ interface AdditionalInfoItem {
   description: string;
 }
 
+// Helper for generating simple client-side unique IDs
+const generateClientId = () => 'id-' + Date.now().toString(36) + Math.random().toString(36).substring(2);
+
 function EditPageContent() {
   const searchParams = useSearchParams();
   const [selectedRepo, setSelectedRepo] = useState<string>('');
@@ -42,10 +45,16 @@ function EditPageContent() {
   useEffect(() => {
     async function fetchRepositories() {
       try {
-        // Fetch from the relative path, Next.js dev server will proxy this
         const response = await fetch('/api/repos');
         if (!response.ok) {
-          throw new Error(`HTTP error! status: ${response.status}`);
+          let errorDetails = "";
+          try {
+            const errorData = await response.json();
+            errorDetails = errorData.error || JSON.stringify(errorData);
+          } catch (e) {
+            errorDetails = response.statusText;
+          }
+          throw new Error(`HTTP error! status: ${response.status}, Details: ${errorDetails}`);
         }
         const data: Repository[] = await response.json();
         setRepositories(data);
@@ -56,7 +65,7 @@ function EditPageContent() {
           // In a real application, you would fetch and pre-fill all other form data for this repoId
           // For now, we are only pre-selecting the repository.
           // Example:
-          // const selectedRepoData = await fetch(`/api/repo-details/${repoIdFromQuery}`); // Note: uses relative path
+          // const selectedRepoData = await fetch(`/api/repo-details/${repoIdFromQuery}`);
           // const repoDetails = await selectedRepoData.json();
           // setRepoOverview(repoDetails.overview);
           // setTapBap(repoDetails.tapBap);
@@ -67,7 +76,7 @@ function EditPageContent() {
             alert("The repository ID from the URL was not found in the available repositories.");
         }
 
-      } catch (error) {
+      } catch (error: any) {
         console.error("Failed to fetch repositories for edit page:", error);
         setRepositories([]);
         let errorMessage = "Could not fetch repositories for the edit page. Ensure the backend API server is running and accessible via /api/repos.";
@@ -107,7 +116,7 @@ function EditPageContent() {
         item.id === editingId ? { ...item, title: currentInfoTitle, description: currentInfoDescription } : item
       ));
     } else {
-      setAdditionalInfoList([...additionalInfoList, { id: crypto.randomUUID(), title: currentInfoTitle, description: currentInfoDescription }]);
+      setAdditionalInfoList([...additionalInfoList, { id: generateClientId(), title: currentInfoTitle, description: currentInfoDescription }]);
     }
     setIsModalOpen(false);
     setCurrentInfoTitle('');
@@ -154,6 +163,8 @@ function EditPageContent() {
     const repoIdFromQuery = searchParams.get('repoId');
     if (repoIdFromQuery && repositories.find(repo => repo.id === repoIdFromQuery)) {
          setSelectedRepo(repoIdFromQuery);
+    } else if (repositories.length > 0) {
+        setSelectedRepo(repositories[0].id); // Default to first if no query or query invalid
     } else {
         setSelectedRepo('');
     }
@@ -188,8 +199,8 @@ function EditPageContent() {
                     </SelectItem>
                   ))
                 ) : (
-                  <SelectItem value="loading" disabled className="text-base">
-                     { "Failed to load or no repositories. Is the API server running?"}
+                   <SelectItem value="loading" disabled className="text-base">
+                     {selectedRepo ? "Loading or repository not found..." : "Failed to load or no repositories. Is the API server running?"}
                   </SelectItem>
                 )}
               </SelectContent>
@@ -324,7 +335,7 @@ function EditPageContent() {
              <Button variant="destructive" size="lg" onClick={handleDeleteTutor} className="w-full sm:w-auto">
               <Trash2 className="mr-2 h-5 w-5" /> Delete Tutor
             </Button>
-            <Button size="lg" onClick={handleUpdate} className="w-full sm:w-auto" disabled={!selectedRepo}>
+            <Button size="lg" onClick={handleUpdate} className="w-full sm:w-auto" disabled={!selectedRepo || repositories.length === 0}>
               Update
             </Button>
           </div>
@@ -337,7 +348,7 @@ function EditPageContent() {
 // It's good practice to wrap components that use useSearchParams in a Suspense boundary
 export default function EditPage() {
   return (
-    <Suspense fallback={<div>Loading...</div>}>
+    <Suspense fallback={<div>Loading Repositories...</div>}>
       <EditPageContent />
     </Suspense>
   );

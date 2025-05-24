@@ -21,7 +21,7 @@ import {
   SidebarInset,
 } from '@/components/ui/sidebar';
 import { cn } from '@/lib/utils';
-import { ScrollArea } from '@/components/ui/scroll-area'; // Added ScrollArea
+import { ScrollArea } from '@/components/ui/scroll-area'; 
 
 interface Message {
   id: string;
@@ -35,6 +35,9 @@ interface ChatSession {
   title: string;
   lastActivity: Date;
 }
+
+// Helper for generating simple client-side unique IDs
+const generateClientId = () => 'id-' + Date.now().toString(36) + Math.random().toString(36).substring(2);
 
 const LearnPage: FC = () => {
   const [messages, setMessages] = useState<Message[]>([]);
@@ -73,7 +76,7 @@ const LearnPage: FC = () => {
     if (inputValue.trim() === '') return;
 
     const newMessage: Message = {
-      id: crypto.randomUUID(),
+      id: generateClientId(),
       text: inputValue,
       sender: 'user',
       timestamp: new Date(),
@@ -84,7 +87,7 @@ const LearnPage: FC = () => {
 
     setTimeout(() => {
       const aiResponse: Message = {
-        id: crypto.randomUUID(),
+        id: generateClientId(),
         text: `I received your message: "${currentInput}". I am still learning! This is a mock response.`,
         sender: 'ai',
         timestamp: new Date(),
@@ -102,7 +105,7 @@ const LearnPage: FC = () => {
   };
 
   const handleNewChat = () => {
-    const newSessionId = `session-${crypto.randomUUID()}`;
+    const newSessionId = `session-${generateClientId()}`;
     const newSession: ChatSession = {
       id: newSessionId,
       title: `New Chat ${chatSessions.length + 1}`,
@@ -119,10 +122,10 @@ const LearnPage: FC = () => {
     setMessages([
       { id: `msg-placeholder-${sessionId}`, text: `Switched to chat: ${selectedSession?.title || 'this chat'}. History would load here.`, sender: 'ai', timestamp: new Date() }
     ]);
-     if (activeChatId) {
+     if (activeChatId) { // This check seems redundant if we are setting activeChatId just above, but it's harmless.
       setChatSessions(prevSessions =>
         prevSessions.map(session =>
-          session.id === activeChatId ? { ...session, lastActivity: new Date() } : session
+          session.id === sessionId ? { ...session, lastActivity: new Date() } : session // Update lastActivity for the selected session
         ).sort((a, b) => b.lastActivity.getTime() - a.lastActivity.getTime())
       );
     }
@@ -134,14 +137,15 @@ const LearnPage: FC = () => {
       const updatedSessions = prevSessions.filter(session => session.id !== sessionId);
       if (activeChatId === sessionId) {
         if (updatedSessions.length > 0) {
-          setActiveChatId(updatedSessions[0].id);
-          setMessages([{ id: 'placeholder', text: `Switched to ${updatedSessions[0].title}`, sender: 'ai', timestamp: new Date() }]);
+          const nextActiveSession = updatedSessions.sort((a,b) => b.lastActivity.getTime() - a.lastActivity.getTime())[0];
+          setActiveChatId(nextActiveSession.id);
+          setMessages([{ id: 'placeholder', text: `Switched to ${nextActiveSession.title}`, sender: 'ai', timestamp: new Date() }]);
         } else {
           setActiveChatId(null);
           setMessages([]);
         }
       }
-      return updatedSessions;
+      return updatedSessions.sort((a,b) => b.lastActivity.getTime() - a.lastActivity.getTime());
     });
   };
   
@@ -338,5 +342,3 @@ const LearnPage: FC = () => {
 }
 
 export default LearnPage;
-
-    
