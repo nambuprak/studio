@@ -24,6 +24,7 @@ const generateClientId = () => 'id-' + Date.now().toString(36) + Math.random().t
 type InputType = 'folder' | 'url';
 
 export default function CreatePage() {
+  const [projectName, setProjectName] = useState<string>('');
   const [inputType, setInputType] = useState<InputType>('folder');
   const [sourceLocation, setSourceLocation] = useState<string>('');
   const [repoOverview, setRepoOverview] = useState<string>('');
@@ -39,7 +40,6 @@ export default function CreatePage() {
   const [currentInfoDescription, setCurrentInfoDescription] = useState<string>('');
   const [editingId, setEditingId] = useState<string | null>(null);
 
-  // State for status modal and polling
   const [isStatusModalOpen, setIsStatusModalOpen] = useState<boolean>(false);
   const [statusMessage, setStatusMessage] = useState<string>('');
   const [processingTutorId, setProcessingTutorId] = useState<string | null>(null);
@@ -49,7 +49,7 @@ export default function CreatePage() {
 
   const handleSourceTypeChange = (value: string) => {
     setInputType(value as InputType);
-    setSourceLocation(''); // Clear source location when type changes
+    setSourceLocation(''); 
   };
 
   const handleSourceLocationChange = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -96,12 +96,13 @@ export default function CreatePage() {
   };
   
   const fetchStatus = async (tutorId: string) => {
+    console.log("Polling for status for tutor ID:", tutorId);
     try {
       const response = await fetch(`/api/tutor-status/${tutorId}`);
       if (!response.ok) {
-        const errorData = await response.json().catch(() => ({ detail: "Failed to parse error from status endpoint." }));
-        setStatusMessage(`Error fetching status: ${errorData.detail || response.statusText}`);
-        setIsProcessingComplete(true); // Stop polling on error
+        const errorData = await response.json().catch(() => ({ error: "Failed to parse error from status endpoint." }));
+        setStatusMessage(`Error fetching status: ${errorData.error || response.statusText}`);
+        setIsProcessingComplete(true); 
         if (pollingIntervalId) clearInterval(pollingIntervalId);
         setPollingIntervalId(null);
         return;
@@ -113,9 +114,10 @@ export default function CreatePage() {
         setIsProcessingComplete(true);
         if (pollingIntervalId) clearInterval(pollingIntervalId);
         setPollingIntervalId(null);
-        setProcessingTutorId(null); // Clear processing ID
+        // Do not clear processingTutorId here, it might be needed if user re-opens modal or for other logic
       }
     } catch (error: any) {
+      console.error("Error in fetchStatus:", error);
       setStatusMessage(`Error fetching status: ${error.message}`);
       setIsProcessingComplete(true);
       if (pollingIntervalId) clearInterval(pollingIntervalId);
@@ -125,12 +127,15 @@ export default function CreatePage() {
 
   useEffect(() => {
     if (processingTutorId && isStatusModalOpen && !isProcessingComplete) {
+      // Initial fetch
+      fetchStatus(processingTutorId);
       const intervalId = setInterval(() => {
         fetchStatus(processingTutorId);
       }, 3000);
       setPollingIntervalId(intervalId);
+      
       return () => {
-        clearInterval(intervalId);
+        if (intervalId) clearInterval(intervalId);
         setPollingIntervalId(null);
       };
     } else if (pollingIntervalId && (isProcessingComplete || !isStatusModalOpen)) {
@@ -142,17 +147,23 @@ export default function CreatePage() {
 
 
   const handleGenerate = async () => {
+    if (!projectName.trim()) {
+      alert('Please enter a Project Name.');
+      return;
+    }
     if (!sourceLocation.trim()) {
       alert(`Please enter the ${inputType === 'folder' ? 'folder path' : 'repository URL'}.`);
       return;
     }
-    setIsLoading(true); // For the initial POST request
+    
+    setIsLoading(true); 
 
     if (inputType === 'url' && embedRepo) {
         alert("Processing a repository URL with embedding enabled can take some time. The server will process it in the background. A status modal will appear.");
     }
     
     const payload = {
+      project_name: projectName,
       input_type: inputType,
       source_location: sourceLocation,
       repo_overview: repoOverview,
@@ -174,23 +185,22 @@ export default function CreatePage() {
 
       const result = await response.json();
 
-      if (!response.ok) { // Catches 4xx, 5xx errors for the initial POST
-        throw new Error(result.error || result.detail || `Server error: ${response.status}`);
+      if (!response.ok) { 
+        throw new Error(result.error || result.details || `Server error: ${response.status}`);
       }
+      
+      setIsLoading(false); // Stop main button loading
 
-      // If embedding is requested, server returns 202 and we start polling
       if (embedRepo && response.status === 202 && result.tutor_id) {
         setProcessingTutorId(result.tutor_id);
         setStatusMessage(result.message || "Processing initiated...");
         setIsProcessingComplete(false);
-        setIsStatusModalOpen(true);
-        setIsLoading(false); // Initial request done, modal takes over
-         // Form can be cleared or user can navigate away
+        setIsStatusModalOpen(true); 
+        // Optionally clear form here or guide user
         // handleClearForm(); 
-      } else { // Synchronous completion (embedRepo is false or other cases)
+      } else { 
         alert(`Self Tutor created successfully!\nProject Name: ${result.project_name}\nTutor ID: ${result.tutor_id}\nFiles processed: ${result.discovered_files_count !== undefined ? result.discovered_files_count : 'N/A (Embedding skipped)'}\nMessage: ${result.message}`);
-        setIsLoading(false);
-        // handleClearForm(); 
+        handleClearForm(); 
       }
     } catch (error: any) {
       console.error("Failed to generate Self Tutor:", error);
@@ -201,14 +211,15 @@ export default function CreatePage() {
   
   const closeStatusModal = () => {
     setIsStatusModalOpen(false);
-    if (pollingIntervalId) clearInterval(pollingIntervalId);
-    setPollingIntervalId(null);
-    setProcessingTutorId(null);
+    // Polling interval cleanup is handled by the useEffect
+    // Reset status for next time
+    setProcessingTutorId(null); 
     setStatusMessage('');
     setIsProcessingComplete(false);
   };
 
   const handleClearForm = () => {
+    setProjectName('');
     setInputType('folder');
     setSourceLocation('');
     setRepoOverview('');
@@ -229,6 +240,18 @@ export default function CreatePage() {
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-6">
+          <div className="space-y-2">
+            <Label htmlFor="project-name-input" className="text-base font-semibold">Project Name</Label>
+            <Input
+              id="project-name-input"
+              type="text"
+              value={projectName}
+              onChange={(e) => setProjectName(e.target.value)}
+              placeholder="e.g., My Awesome Project"
+              className="text-base py-3 h-14"
+            />
+          </div>
+
           <div className="space-y-2">
             <Label className="text-base font-semibold">Source Type</Label>
             <RadioGroup
@@ -389,14 +412,14 @@ export default function CreatePage() {
 
           <div className="flex flex-col sm:flex-row justify-end space-y-3 sm:space-y-0 sm:space-x-3 pt-6 border-t mt-2">
              <Link href="/" passHref legacyBehavior>
-              <Button variant="outline" size="lg" className="w-full sm:w-auto" disabled={isLoading && !isStatusModalOpen}>
+              <Button variant="outline" size="lg" className="w-full sm:w-auto" disabled={isLoading || isStatusModalOpen}>
                 <ArrowLeft className="mr-2 h-5 w-5" /> Go Home
               </Button>
             </Link>
-            <Button variant="destructive" size="lg" onClick={handleClearForm} className="w-full sm:w-auto" disabled={isLoading && !isStatusModalOpen}>
+            <Button variant="destructive" size="lg" onClick={handleClearForm} className="w-full sm:w-auto" disabled={isLoading || isStatusModalOpen}>
               Clear Form
             </Button>
-            <Button size="lg" onClick={handleGenerate} className="w-full sm:w-auto" disabled={isLoading && !isStatusModalOpen}>
+            <Button size="lg" onClick={handleGenerate} className="w-full sm:w-auto" disabled={isLoading || isStatusModalOpen}>
               {(isLoading && !isStatusModalOpen) && <Loader2 className="mr-2 h-5 w-5 animate-spin" />}
               {(isLoading && !isStatusModalOpen) ? "Submitting..." : "Generate Self Tutor"}
             </Button>
@@ -404,9 +427,21 @@ export default function CreatePage() {
         </CardContent>
       </Card>
 
-      {/* Status Modal */}
-      <Dialog open={isStatusModalOpen} onOpenChange={(open) => { if (!open && isProcessingComplete) closeStatusModal(); else if (!open && !isProcessingComplete) alert("Processing is ongoing. Please wait or ensure the server is responsive.");}}>
-        <DialogContent className="sm:max-w-[425px]">
+      <Dialog open={isStatusModalOpen} onOpenChange={(open) => { 
+          if (!open) { // If user tries to close the modal
+            if (isProcessingComplete) {
+              closeStatusModal();
+            } else {
+              // Optionally, prevent closing or warn if processing is not complete
+              // For now, we allow closing, polling will stop via useEffect cleanup
+              setIsStatusModalOpen(false); 
+            }
+          } else {
+            setIsStatusModalOpen(true); // If opening
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-[425px]" onPointerDownOutside={(e) => { if(!isProcessingComplete) e.preventDefault();}}>
           <DialogHeader>
             <DialogTitle>Processing Self Tutor</DialogTitle>
           </DialogHeader>
@@ -426,3 +461,5 @@ export default function CreatePage() {
     </main>
   );
 }
+
+    
