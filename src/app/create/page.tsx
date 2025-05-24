@@ -19,7 +19,6 @@ interface AdditionalInfoItem {
   description: string;
 }
 
-// Helper for generating simple client-side unique IDs
 const generateClientId = () => 'id-' + Date.now().toString(36) + Math.random().toString(36).substring(2);
 
 type InputType = 'folder' | 'url';
@@ -29,8 +28,8 @@ export default function CreatePage() {
   const [sourceLocation, setSourceLocation] = useState<string>('');
   const [repoOverview, setRepoOverview] = useState<string>('');
   const [tapBap, setTapBap] = useState<string>('');
-  const [fileTypes, setFileTypes] = useState<string>('');
-  const [excludeFolders, setExcludeFolders] = useState<string>('');
+  const [fileTypes, setFileTypes] = useState<string>('.js, .ts, .html, .css, .py, .json');
+  const [excludeFolders, setExcludeFolders] = useState<string>('node_modules, dist, .git');
   const [embedRepo, setEmbedRepo] = useState<boolean>(false);
   const [isLoading, setIsLoading] = useState<boolean>(false);
 
@@ -97,11 +96,16 @@ export default function CreatePage() {
       tap_bap: tapBap,
       file_types: fileTypes,
       exclude_folders: excludeFolders,
-      additional_info_list: additionalInfoList.map(({ title, description }) => ({ title, description })),
+      additional_info_list: additionalInfoList.map(({ id, ...rest }) => rest), // Exclude client-side id
       embed_repo: embedRepo,
     };
 
     try {
+      // Note: Standard fetch has browser-specific timeouts (e.g., ~2-5 minutes).
+      // For very long operations (like large repo cloning + embedding), 
+      // a more robust solution involves asynchronous task processing on the server 
+      // and client-side polling or WebSockets for updates.
+      // This current setup will wait for the server to complete its entire process.
       const response = await fetch('/api/analyze-repo', {
         method: 'POST',
         headers: {
@@ -116,7 +120,7 @@ export default function CreatePage() {
         throw new Error(result.error || `Server error: ${response.status}`);
       }
 
-      alert(`Self Tutor created successfully!\nProject Name: ${result.project_name}\nTutor ID: ${result.tutor_id}\nFiles processed: ${result.discovered_files_count !== undefined ? result.discovered_files_count : 'N/A (Embedding skipped)'}`);
+      alert(`Self Tutor created successfully!\nProject Name: ${result.project_name}\nTutor ID: ${result.tutor_id}\nFiles processed: ${result.discovered_files_count !== undefined ? result.discovered_files_count : 'N/A (Embedding skipped)'}\nMessage: ${result.message}`);
       // Optionally, clear form or redirect
       // handleClearForm(); 
     } catch (error: any) {
@@ -132,8 +136,8 @@ export default function CreatePage() {
     setSourceLocation('');
     setRepoOverview('');
     setTapBap('');
-    setFileTypes('');
-    setExcludeFolders('');
+    setFileTypes('.js, .ts, .html, .css, .py, .json');
+    setExcludeFolders('node_modules, dist, .git');
     setEmbedRepo(false);
     setAdditionalInfoList([]);
     console.log("Form cleared.");
@@ -151,11 +155,10 @@ export default function CreatePage() {
           <div className="space-y-2">
             <Label className="text-base font-semibold">Source Type</Label>
             <RadioGroup
-              defaultValue="folder"
               value={inputType}
               onValueChange={(value: string) => {
                 setInputType(value as InputType);
-                setSourceLocation(''); // Clear input when type changes
+                setSourceLocation(''); 
               }}
               className="flex space-x-4"
             >
@@ -329,5 +332,3 @@ export default function CreatePage() {
     </main>
   );
 }
-
-    
