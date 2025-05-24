@@ -31,13 +31,26 @@ export default function CreatePage() {
   const [fileTypes, setFileTypes] = useState<string>('.js, .ts, .html, .css, .py, .json');
   const [excludeFolders, setExcludeFolders] = useState<string>('node_modules, dist, .git');
   const [embedRepo, setEmbedRepo] = useState<boolean>(false);
+  
   const [isLoading, setIsLoading] = useState<boolean>(false);
-
   const [additionalInfoList, setAdditionalInfoList] = useState<AdditionalInfoItem[]>([]);
   const [isModalOpen, setIsModalOpen] = useState<boolean>(false);
   const [currentInfoTitle, setCurrentInfoTitle] = useState<string>('');
   const [currentInfoDescription, setCurrentInfoDescription] = useState<string>('');
   const [editingId, setEditingId] = useState<string | null>(null);
+
+  // State for status modal and polling
+  const [isStatusModalOpen, setIsStatusModalOpen] = useState<boolean>(false);
+  const [statusMessage, setStatusMessage] = useState<string>('');
+  const [processingTutorId, setProcessingTutorId] = useState<string | null>(null);
+  const [isProcessingComplete, setIsProcessingComplete] = useState<boolean>(false);
+  const [pollingIntervalId, setPollingIntervalId] = useState<NodeJS.Timeout | null>(null);
+
+
+  const handleSourceTypeChange = (value: string) => {
+    setInputType(value as InputType);
+    setSourceLocation(''); // Clear source location when type changes
+  };
 
   const handleSourceLocationChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     setSourceLocation(event.target.value);
@@ -82,15 +95,61 @@ export default function CreatePage() {
     setAdditionalInfoList(additionalInfoList.filter(item => item.id !== id));
   };
   
+  const fetchStatus = async (tutorId: string) => {
+    try {
+      const response = await fetch(`/api/tutor-status/${tutorId}`);
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ detail: "Failed to parse error from status endpoint." }));
+        setStatusMessage(`Error fetching status: ${errorData.detail || response.statusText}`);
+        setIsProcessingComplete(true); // Stop polling on error
+        if (pollingIntervalId) clearInterval(pollingIntervalId);
+        setPollingIntervalId(null);
+        return;
+      }
+      const statusData = await response.json();
+      setStatusMessage(statusData.message || 'Processing...');
+      
+      if (statusData.status === 'COMPLETED' || statusData.status === 'FAILED') {
+        setIsProcessingComplete(true);
+        if (pollingIntervalId) clearInterval(pollingIntervalId);
+        setPollingIntervalId(null);
+        setProcessingTutorId(null); // Clear processing ID
+      }
+    } catch (error: any) {
+      setStatusMessage(`Error fetching status: ${error.message}`);
+      setIsProcessingComplete(true);
+      if (pollingIntervalId) clearInterval(pollingIntervalId);
+      setPollingIntervalId(null);
+    }
+  };
+
+  useEffect(() => {
+    if (processingTutorId && isStatusModalOpen && !isProcessingComplete) {
+      const intervalId = setInterval(() => {
+        fetchStatus(processingTutorId);
+      }, 3000);
+      setPollingIntervalId(intervalId);
+      return () => {
+        clearInterval(intervalId);
+        setPollingIntervalId(null);
+      };
+    } else if (pollingIntervalId && (isProcessingComplete || !isStatusModalOpen)) {
+        clearInterval(pollingIntervalId);
+        setPollingIntervalId(null);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [processingTutorId, isStatusModalOpen, isProcessingComplete]);
+
+
   const handleGenerate = async () => {
     if (!sourceLocation.trim()) {
       alert(`Please enter the ${inputType === 'folder' ? 'folder path' : 'repository URL'}.`);
       return;
     }
-    setIsLoading(true);
+    setIsLoading(true); // For the initial POST request
 
     if (inputType === 'url' && embedRepo) {
-        alert("Processing a repository URL with embedding enabled can take some time. The page will be unresponsive until the server completes the operation. Please be patient.");
+        alert("Processing a repository URL with embedding enabled can take some time. The server will process it in the background. A status modal will appear.");
     }
     
     const payload = {
@@ -115,19 +174,38 @@ export default function CreatePage() {
 
       const result = await response.json();
 
-      if (!response.ok) {
-        throw new Error(result.error || `Server error: ${response.status}`);
+      if (!response.ok) { // Catches 4xx, 5xx errors for the initial POST
+        throw new Error(result.error || result.detail || `Server error: ${response.status}`);
       }
 
-      alert(`Self Tutor created successfully!\nProject Name: ${result.project_name}\nTutor ID: ${result.tutor_id}\nFiles processed: ${result.discovered_files_count !== undefined ? result.discovered_files_count : 'N/A (Embedding skipped)'}\nMessage: ${result.message}`);
-      // Optionally, clear form or redirect
-      // handleClearForm(); 
+      // If embedding is requested, server returns 202 and we start polling
+      if (embedRepo && response.status === 202 && result.tutor_id) {
+        setProcessingTutorId(result.tutor_id);
+        setStatusMessage(result.message || "Processing initiated...");
+        setIsProcessingComplete(false);
+        setIsStatusModalOpen(true);
+        setIsLoading(false); // Initial request done, modal takes over
+         // Form can be cleared or user can navigate away
+        // handleClearForm(); 
+      } else { // Synchronous completion (embedRepo is false or other cases)
+        alert(`Self Tutor created successfully!\nProject Name: ${result.project_name}\nTutor ID: ${result.tutor_id}\nFiles processed: ${result.discovered_files_count !== undefined ? result.discovered_files_count : 'N/A (Embedding skipped)'}\nMessage: ${result.message}`);
+        setIsLoading(false);
+        // handleClearForm(); 
+      }
     } catch (error: any) {
       console.error("Failed to generate Self Tutor:", error);
       alert(`Failed to generate Self Tutor: ${error.message}`);
-    } finally {
       setIsLoading(false);
     }
+  };
+  
+  const closeStatusModal = () => {
+    setIsStatusModalOpen(false);
+    if (pollingIntervalId) clearInterval(pollingIntervalId);
+    setPollingIntervalId(null);
+    setProcessingTutorId(null);
+    setStatusMessage('');
+    setIsProcessingComplete(false);
   };
 
   const handleClearForm = () => {
@@ -155,10 +233,7 @@ export default function CreatePage() {
             <Label className="text-base font-semibold">Source Type</Label>
             <RadioGroup
               value={inputType}
-              onValueChange={(value: string) => {
-                setInputType(value as InputType);
-                setSourceLocation(''); 
-              }}
+              onValueChange={handleSourceTypeChange}
               className="flex space-x-4"
             >
               <div className="flex items-center space-x-2">
@@ -308,26 +383,46 @@ export default function CreatePage() {
           <div className="items-center flex space-x-2 pt-4 border-t mt-4">
             <Checkbox id="embed-repo" checked={embedRepo} onCheckedChange={(checked) => setEmbedRepo(Boolean(checked))} />
             <Label htmlFor="embed-repo" className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">
-              Embed Repository/Folder Content (processes files server-side)
+              Embed Repository/Folder Content (processes files server-side - can be slow for URLs)
             </Label>
           </div>
 
           <div className="flex flex-col sm:flex-row justify-end space-y-3 sm:space-y-0 sm:space-x-3 pt-6 border-t mt-2">
              <Link href="/" passHref legacyBehavior>
-              <Button variant="outline" size="lg" className="w-full sm:w-auto" disabled={isLoading}>
+              <Button variant="outline" size="lg" className="w-full sm:w-auto" disabled={isLoading && !isStatusModalOpen}>
                 <ArrowLeft className="mr-2 h-5 w-5" /> Go Home
               </Button>
             </Link>
-            <Button variant="destructive" size="lg" onClick={handleClearForm} className="w-full sm:w-auto" disabled={isLoading}>
+            <Button variant="destructive" size="lg" onClick={handleClearForm} className="w-full sm:w-auto" disabled={isLoading && !isStatusModalOpen}>
               Clear Form
             </Button>
-            <Button size="lg" onClick={handleGenerate} className="w-full sm:w-auto" disabled={isLoading}>
-              {isLoading && <Loader2 className="mr-2 h-5 w-5 animate-spin" />}
-              {isLoading ? "Generating..." : "Generate Self Tutor"}
+            <Button size="lg" onClick={handleGenerate} className="w-full sm:w-auto" disabled={isLoading && !isStatusModalOpen}>
+              {(isLoading && !isStatusModalOpen) && <Loader2 className="mr-2 h-5 w-5 animate-spin" />}
+              {(isLoading && !isStatusModalOpen) ? "Submitting..." : "Generate Self Tutor"}
             </Button>
           </div>
         </CardContent>
       </Card>
+
+      {/* Status Modal */}
+      <Dialog open={isStatusModalOpen} onOpenChange={(open) => { if (!open && isProcessingComplete) closeStatusModal(); else if (!open && !isProcessingComplete) alert("Processing is ongoing. Please wait or ensure the server is responsive.");}}>
+        <DialogContent className="sm:max-w-[425px]">
+          <DialogHeader>
+            <DialogTitle>Processing Self Tutor</DialogTitle>
+          </DialogHeader>
+          <div className="grid gap-4 py-4">
+            <div className="flex items-center justify-center space-x-2">
+              {!isProcessingComplete && <Loader2 className="h-5 w-5 animate-spin text-primary" />}
+              <p className="text-sm text-muted-foreground">{statusMessage}</p>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button onClick={closeStatusModal} disabled={!isProcessingComplete}>
+              Close
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </main>
   );
 }
