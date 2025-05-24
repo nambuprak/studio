@@ -2,7 +2,7 @@
 "use client";
 
 import Link from 'next/link';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -10,6 +10,7 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogTrigger, DialogClose } from '@/components/ui/dialog';
 import { Checkbox } from "@/components/ui/checkbox";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { ArrowLeft, PlusSquare, PlusCircle, Edit, Trash2, Loader2 } from 'lucide-react';
 
 interface AdditionalInfoItem {
@@ -21,8 +22,11 @@ interface AdditionalInfoItem {
 // Helper for generating simple client-side unique IDs
 const generateClientId = () => 'id-' + Date.now().toString(36) + Math.random().toString(36).substring(2);
 
+type InputType = 'folder' | 'url';
+
 export default function CreatePage() {
-  const [selectedRepo, setSelectedRepo] = useState<string>(''); // Stores the repository URL
+  const [inputType, setInputType] = useState<InputType>('folder');
+  const [sourceLocation, setSourceLocation] = useState<string>('');
   const [repoOverview, setRepoOverview] = useState<string>('');
   const [tapBap, setTapBap] = useState<string>('');
   const [fileTypes, setFileTypes] = useState<string>('');
@@ -36,8 +40,8 @@ export default function CreatePage() {
   const [currentInfoDescription, setCurrentInfoDescription] = useState<string>('');
   const [editingId, setEditingId] = useState<string | null>(null);
 
-  const handlePathChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-    setSelectedRepo(event.target.value);
+  const handleSourceLocationChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    setSourceLocation(event.target.value);
   };
 
   const openModalForAdd = () => {
@@ -80,14 +84,15 @@ export default function CreatePage() {
   };
   
   const handleGenerate = async () => {
-    if (!selectedRepo.trim()) {
-      alert("Please enter the repository URL.");
+    if (!sourceLocation.trim()) {
+      alert(`Please enter the ${inputType === 'folder' ? 'folder path' : 'repository URL'}.`);
       return;
     }
     setIsLoading(true);
 
     const payload = {
-      repo_url: selectedRepo,
+      input_type: inputType,
+      source_location: sourceLocation,
       repo_overview: repoOverview,
       tap_bap: tapBap,
       file_types: fileTypes,
@@ -123,7 +128,8 @@ export default function CreatePage() {
   };
 
   const handleClearForm = () => {
-    setSelectedRepo('');
+    setInputType('folder');
+    setSourceLocation('');
     setRepoOverview('');
     setTapBap('');
     setFileTypes('');
@@ -143,18 +149,42 @@ export default function CreatePage() {
         </CardHeader>
         <CardContent className="space-y-6">
           <div className="space-y-2">
-            <Label htmlFor="repository-url-input" className="text-base font-semibold">Repository URL</Label>
+            <Label className="text-base font-semibold">Source Type</Label>
+            <RadioGroup
+              defaultValue="folder"
+              value={inputType}
+              onValueChange={(value: string) => {
+                setInputType(value as InputType);
+                setSourceLocation(''); // Clear input when type changes
+              }}
+              className="flex space-x-4"
+            >
+              <div className="flex items-center space-x-2">
+                <RadioGroupItem value="folder" id="folder" />
+                <Label htmlFor="folder">Folder Directory</Label>
+              </div>
+              <div className="flex items-center space-x-2">
+                <RadioGroupItem value="url" id="url" />
+                <Label htmlFor="url">Repository URL</Label>
+              </div>
+            </RadioGroup>
+          </div>
+          
+          <div className="space-y-2">
+            <Label htmlFor="source-location-input" className="text-base font-semibold">
+              {inputType === 'folder' ? 'Project Folder Path' : 'Repository URL'}
+            </Label>
             <Input
-              id="repository-url-input"
+              id="source-location-input"
               type="text"
-              value={selectedRepo}
-              onChange={handlePathChange}
-              placeholder="e.g., https://github.com/your-username/your-repo.git"
+              value={sourceLocation}
+              onChange={handleSourceLocationChange}
+              placeholder={inputType === 'folder' ? 'e.g., /path/to/your/local/project' : 'e.g., https://github.com/your-username/your-repo.git'}
               className="text-base py-3 h-14"
             />
-            {selectedRepo && (
+            {sourceLocation && (
               <p className="text-sm text-muted-foreground mt-1">
-                Entered URL: <span className="font-medium text-foreground">{selectedRepo}</span>
+                Entered {inputType === 'folder' ? 'path' : 'URL'}: <span className="font-medium text-foreground">{sourceLocation}</span>
               </p>
             )}
           </div>
@@ -183,7 +213,7 @@ export default function CreatePage() {
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="file-types" className="text-base font-semibold">File Types (comma-separated)</Label>
+            <Label htmlFor="file-types" className="text-base font-semibold">File Types (comma-separated, e.g., .ts,.py)</Label>
             <Input
               id="file-types"
               value={fileTypes}
@@ -276,7 +306,7 @@ export default function CreatePage() {
           <div className="items-center flex space-x-2 pt-4 border-t mt-4">
             <Checkbox id="embed-repo" checked={embedRepo} onCheckedChange={(checked) => setEmbedRepo(Boolean(checked))} />
             <Label htmlFor="embed-repo" className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">
-              Embed Repository Content (clones and processes files server-side)
+              Embed Repository/Folder Content (processes files server-side)
             </Label>
           </div>
 
@@ -299,3 +329,5 @@ export default function CreatePage() {
     </main>
   );
 }
+
+    
