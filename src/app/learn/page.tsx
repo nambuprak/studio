@@ -18,6 +18,7 @@ import {
   SidebarMenu,
   SidebarMenuItem,
   SidebarMenuButton,
+  SidebarInset, // Added SidebarInset here
 } from '@/components/ui/sidebar';
 import { cn } from '@/lib/utils';
 import { ScrollArea } from '@/components/ui/scroll-area'; 
@@ -60,7 +61,13 @@ const LearnPage: FC = () => {
         const tutorsData: Array<{id: string, project_name: string, status_message?: string, discovered_files_count?: number}> = await response.json();
         
         const formattedSessions: TutorSession[] = tutorsData
-          .filter(tutor => (tutor.status_message || "").includes("Embedding process fully completed") || (tutor.status_message || "").includes("Embedding skipped") ) // Only show tutors ready for chat
+          .filter(tutor => {
+            const status = tutor.status_message || "";
+            // Check for completion messages, including those that mention embedding was skipped
+            return status.includes("Embedding process fully completed") || 
+                   status.includes("Embedding skipped") ||
+                   status.includes("Self Tutor configuration saved. Embedding skipped.");
+          })
           .map(tutor => ({
             id: tutor.id,
             title: tutor.project_name,
@@ -77,7 +84,7 @@ const LearnPage: FC = () => {
             { id: generateClientId(), text: `Switched to tutor: ${formattedSessions[0].title}. Ask me anything about this project!`, sender: 'system', timestamp: new Date() },
           ]);
         } else {
-          setMessages([{id: generateClientId(), text: "No tutors available for chat or none have completed embedding. Please create and embed a tutor first.", sender: 'system', timestamp: new Date()}]);
+          setMessages([{id: generateClientId(), text: "No tutors available for chat or none have completed processing. Please create a tutor and ensure embedding is complete or skipped.", sender: 'system', timestamp: new Date()}]);
         }
       } catch (error) {
         console.error("Error fetching tutors:", error);
@@ -386,3 +393,5 @@ const LearnPage: FC = () => {
 }
 
 export default LearnPage;
+
+    
