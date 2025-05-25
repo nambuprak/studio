@@ -8,7 +8,8 @@ from typing import List, Dict, Any, Optional
 
 import chromadb
 from chromadb.api.models.Collection import Collection as ChromaCollection
-from langchain.text_splitter import CharacterTextSplitter
+# from langchain_community.document_loaders import TextLoader # Not used directly here, handled by caller
+from langchain.text_splitter import CharacterTextSplitter # Correct import if using langchain for splitting
 
 # Environment variables or constants from your script (adapt as needed)
 EMBEDDING_MODEL_NAME = os.getenv("EMBEDDING_MODEL", "text-embedding-ada-002")
@@ -22,18 +23,33 @@ os.makedirs(PERSIST_DIR_BASE, exist_ok=True)
 print(f"ChromaDB persistence directory set to: {PERSIST_DIR_BASE}")
 
 
-def _update_status_safely(status_dict: Dict[str, Any], message: str, error: Optional[str] = None, progress_detail: Optional[str] = None):
+def _update_status_safely(status_dict: Optional[Dict[str, Any]], message: Optional[str] = None, error: Optional[str] = None, progress_detail: Optional[str] = None):
     if status_dict is None:
         print(f"Warning: status_dict is None. Message: {message}, Error: {error}")
         return
+    
+    current_tutor_id = status_dict.get('tutor_id', 'N/A')
+    log_prefix = f"Status Update (TutorID: {current_tutor_id}): "
+
     if message:
         status_dict["message"] = message
-        print(f"Status Update (TutorID: {status_dict.get('tutor_id', 'N/A')}): {message}")
+        print(f"{log_prefix}{message}")
     if error:
         status_dict["error"] = error
-        print(f"Error Update (TutorID: {status_dict.get('tutor_id', 'N/A')}): {error}")
+        # If there's an error, it often becomes the main message or part of it
+        error_message_to_set = f"Error: {error}"
+        if message and "error" not in message.lower() and "failed" not in message.lower():
+            status_dict["message"] = f"{message} - {error_message_to_set}"
+        else:
+            status_dict["message"] = error_message_to_set
+        print(f"{log_prefix}Error recorded: {error}")
+
     if progress_detail: # For more granular updates if needed
         status_dict["progress_detail"] = progress_detail
+        # Often, a progress detail also becomes the main status message if no other message is more prominent
+        if not message and "message" not in status_dict: # if no specific message set yet
+             status_dict["message"] = progress_detail
+        print(f"{log_prefix}Progress: {progress_detail}")
 
 
 def get_embedding_for_text(text: str, status_dict: dict) -> Optional[List[float]]:
@@ -102,6 +118,7 @@ def add_chunk_to_chromadb(collection: ChromaCollection, text_chunk: str, embeddi
             metadatas=[metadata]
         )
         # _update_status_safely(status_dict, progress_detail=f"Added chunk (ID: {chunk_id}, Source: {metadata.get('source')}) to ChromaDB.")
+        # This level of detail might be too verbose for the main status_dict message, keeping it commented.
     except Exception as e:
         _update_status_safely(status_dict, message=f"Error adding chunk (Source: {metadata.get('source')}) to ChromaDB: {e}", error=str(e))
 
@@ -127,12 +144,12 @@ def _process_text_document_for_embedding(
         return
         
     num_chunks = len(raw_chunks)
-    _update_status_safely(status_dict, message=f"Split '{source_name}' into {num_chunks} chunk(s).")
+    _update_status_safely(status_dict, progress_detail=f"Split '{source_name}' into {num_chunks} chunk(s). Setting this as current message.") # Adjusted to provide a message
 
     for i, chunk_text in enumerate(raw_chunks):
         if not chunk_text.strip(): # Skip empty chunks
             continue
-        _update_status_safely(status_dict, progress_detail=f"Embedding chunk {i+1}/{num_chunks} from '{source_name}'...")
+        _update_status_safely(status_dict, progress_detail=f"Embedding chunk {i+1}/{num_chunks} from '{source_name}'...") # This will update status_dict["message"] if no other message is set
         
         embedding = get_embedding_for_text(chunk_text, status_dict)
         if embedding:
@@ -207,9 +224,6 @@ def embed_documents_for_tutor(
     if file_paths:
         _update_status_safely(status_dict, message=f"Preparing to embed content from {len(file_paths)} discovered files...")
         # Adjust max_workers based on your embedding API's rate limits and server capacity
-        # For I/O bound tasks (like network calls), more workers can be beneficial.
-        # For CPU bound tasks (like heavy text processing before API call), os.cpu_count() is a good start.
-        # Since embedding is network-bound, we can try more.
         max_workers = min(10, os.cpu_count() * 2 if os.cpu_count() else 4) 
         
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -220,19 +234,21 @@ def embed_documents_for_tutor(
                     file_path, 
                     collection, 
                     text_splitter, 
-                    status_dict # Pass status_dict; be mindful of thread-safety if modifying complex parts
+                    status_dict 
                 ))
             
             processed_files_count = 0
+            total_files = len(file_paths)
             for i, future in enumerate(futures):
                 try:
                     future.result() # Wait for each file's processing to complete
                     processed_files_count +=1
-                    _update_status_safely(status_dict, progress_detail=f"Completed embedding for file {i+1}/{len(file_paths)}.")
+                    # Provide a message for each completed file if desired, or a summary
+                    _update_status_safely(status_dict, progress_detail=f"Completed embedding for file {i+1}/{total_files}: {os.path.basename(file_paths[i])}.")
                 except Exception as e:
                     # Error already logged by _process_single_file_for_embedding or get_embedding_for_text
-                    _update_status_safely(status_dict, message=f"An error occurred processing one of the files: {e}")
-        _update_status_safely(status_dict, message=f"Finished embedding content from {processed_files_count}/{len(file_paths)} files.")
+                    _update_status_safely(status_dict, message=f"An error occurred processing one of the files ({os.path.basename(file_paths[i])}): {e}")
+        _update_status_safely(status_dict, message=f"Finished embedding content from {processed_files_count}/{total_files} files.")
     else:
         _update_status_safely(status_dict, message="No files discovered or provided for embedding.")
 

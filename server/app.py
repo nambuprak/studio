@@ -8,10 +8,10 @@ import json
 import threading # For background tasks
 import os # For os.makedirs in __main__
 
-# Refactored service imports using relative paths
-from .services.database_service import init_db, save_tutor_config, get_all_tutors, get_tutor_by_id, update_tutor_processing_details
-from .services.processing_service import process_repository_content
-from .services.utils import extract_project_name_from_url, extract_project_name_from_path
+# Corrected imports based on user feedback for their execution environment
+from services.database_service import init_db, save_tutor_config, get_all_tutors, get_tutor_by_id, update_tutor_processing_details
+from services.processing_service import process_repository_content
+from services.utils import extract_project_name_from_url, extract_project_name_from_path
 
 app = Flask(__name__)
 CORS(app)
@@ -20,7 +20,6 @@ CORS(app)
 init_db()
 
 # --- In-memory store for processing status (POC only) ---
-# This will store status updates for ongoing processing jobs.
 # Key: tutor_id, Value: {"status": "PROCESSING/COMPLETED/FAILED", "message": "...", "project_name": "...", "tutor_id": "...", "discovered_files_count": 0, "error": None}
 TUTOR_PROCESSING_STATUS: Dict[str, Dict[str, Any]] = {}
 
@@ -82,6 +81,7 @@ def _perform_long_repository_processing(tutor_id: str, data: CreateTutorInput, a
         
         try:
             # 1. Save initial tutor configuration to DB
+            parsed_additional_info_list = [item.model_dump() for item in data.additional_info_list]
             save_tutor_config(
                 tutor_id=tutor_id,
                 project_name=project_name_from_data, # Use user-provided name
@@ -91,7 +91,7 @@ def _perform_long_repository_processing(tutor_id: str, data: CreateTutorInput, a
                 tap_bap=data.tap_bap,
                 file_types_str=data.file_types,
                 exclude_folders_str=data.exclude_folders,
-                additional_info_list_json=json.dumps([item.model_dump() for item in data.additional_info_list]),
+                additional_info_list_json=json.dumps(parsed_additional_info_list),
                 embed_repo_flag=data.embed_repo,
                 initial_status_message="Configuration saved. Awaiting embedding if requested." # Initial DB status
             )
@@ -107,8 +107,6 @@ def _perform_long_repository_processing(tutor_id: str, data: CreateTutorInput, a
                 print(f"Starting repository content processing (including embedding) for tutor_id: {tutor_id}")
                 _update_status_safely(current_status, status="PROCESSING_EMBEDDING", message=f"Processing and embedding repository content for {project_name_from_data}...")
                 
-                additional_info_dicts = [item.model_dump() for item in data.additional_info_list]
-
                 discovered_files_count, processing_message_from_service = process_repository_content(
                     input_type=data.input_type,
                     source_location=data.source_location,
@@ -117,7 +115,7 @@ def _perform_long_repository_processing(tutor_id: str, data: CreateTutorInput, a
                     tutor_id=tutor_id,
                     embed_repo_flag=data.embed_repo, 
                     repo_overview=data.repo_overview,
-                    additional_info_list=additional_info_dicts,
+                    additional_info_list=parsed_additional_info_list, # Pass the parsed list
                     status_dict=current_status 
                 )
                 current_status["discovered_files_count"] = discovered_files_count
@@ -241,8 +239,7 @@ def update_tutor_details_route(tutor_id: str):
                 TUTOR_PROCESSING_STATUS[tutor_id]["status"] = "COMPLETED"
                 TUTOR_PROCESSING_STATUS[tutor_id]["message"] = "Configuration updated. Embedding disabled."
                 if "discovered_files_count" in TUTOR_PROCESSING_STATUS[tutor_id]:
-                    TUTOR_PROCESSING_STATUS[tutor_id]["discovered_files_count"] = None
-
+                    TUTOR_PROCESSING_STATUS[tutor_id]["discovered_files_count"] = None # Reset as embedding is now off
 
             return jsonify({
                 "message": "Self Tutor configuration updated successfully. Embedding not enabled.",
@@ -258,7 +255,7 @@ def update_tutor_details_route(tutor_id: str):
 @app.route('/api/tutor-details/<string:tutor_id>', methods=['DELETE'])
 def delete_tutor_route(tutor_id: str):
     # TODO: Also delete associated ChromaDB collection if it exists
-    # from .services.embedding_service import PERSIST_DIR_BASE as chroma_persist_dir_local, initialize_chroma_collection, delete_chroma_collection
+    # from services.embedding_service import PERSIST_DIR_BASE as chroma_persist_dir_local, initialize_chroma_collection, delete_chroma_collection
     # collection_name_to_delete = f"tutor_{tutor_id.replace('-', '_')}"
     # try:
     #   client = chromadb.PersistentClient(path=chroma_persist_dir_local)
@@ -269,7 +266,7 @@ def delete_tutor_route(tutor_id: str):
     
     conn = None
     try:
-        from .services.database_service import get_db_connection # Local import with relative path
+        from services.database_service import get_db_connection
         conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute("DELETE FROM tutors WHERE id = ?", (tutor_id,))
@@ -309,6 +306,7 @@ def analyze_repo_route():
             "tutor_id": tutor_id,
             "error": None
         }
+        # Pass the Flask app context to the thread
         thread = threading.Thread(target=_perform_long_repository_processing, args=(tutor_id, data, app.app_context()))
         thread.start()
         print(f"Background processing thread started for tutor_id: {tutor_id}")
@@ -319,6 +317,8 @@ def analyze_repo_route():
         }), 202
     else:
         try:
+            # Synchronous save if not embedding
+            parsed_additional_info_list = [item.model_dump() for item in data.additional_info_list]
             save_tutor_config(
                 tutor_id=tutor_id,
                 project_name=project_name_to_use,
@@ -328,7 +328,7 @@ def analyze_repo_route():
                 tap_bap=data.tap_bap,
                 file_types_str=data.file_types,
                 exclude_folders_str=data.exclude_folders,
-                additional_info_list_json=json.dumps([item.model_dump() for item in data.additional_info_list]),
+                additional_info_list_json=json.dumps(parsed_additional_info_list),
                 embed_repo_flag=data.embed_repo,
                 initial_status_message="Configuration saved. Embedding skipped."
             )
@@ -353,11 +353,13 @@ def get_tutor_status_route(tutor_id: str):
     status_info = TUTOR_PROCESSING_STATUS.get(tutor_id)
     
     if not status_info:
+        # If not in memory, try to fetch from DB (useful if server restarted or process finished before first poll)
         conn = None
         try:
-            from .services.database_service import get_db_connection # Local import with relative path
+            from services.database_service import get_db_connection # Local import with relative path
             conn = get_db_connection()
             cursor = conn.cursor()
+            # Fetch all relevant fields to reconstruct a status-like object
             cursor.execute("SELECT project_name, status_message, discovered_files_count, processing_error FROM tutors WHERE id = ?", (tutor_id,))
             row = cursor.fetchone()
             if row:
@@ -366,14 +368,16 @@ def get_tutor_status_route(tutor_id: str):
                 db_discovered_files: Optional[int] = row["discovered_files_count"] 
                 db_processing_error: Optional[str] = row["processing_error"] 
                 
-                current_status_from_db = "UNKNOWN_COMPLETED" 
+                # Determine status based on DB info
+                current_status_from_db = "UNKNOWN_COMPLETED" # Default if status_message is generic
                 if "failed" in (db_status_message or "").lower() or db_processing_error:
                     current_status_from_db = "FAILED"
                 elif ("saved" in (db_status_message or "").lower() or "complete" in (db_status_message or "").lower()) and db_discovered_files is not None :
-                     current_status_from_db = "COMPLETED" 
+                     current_status_from_db = "COMPLETED" # Embedding was done
                 elif "skipped" in (db_status_message or "").lower() and db_discovered_files is None :
-                     current_status_from_db = "COMPLETED" 
+                     current_status_from_db = "COMPLETED" # Embedding was skipped
 
+                # Populate the in-memory status so subsequent polls are faster if it's indeed completed/failed
                 TUTOR_PROCESSING_STATUS[tutor_id] = {
                     "status": current_status_from_db,
                     "message": db_status_message or "Status retrieved from DB.",
@@ -384,6 +388,7 @@ def get_tutor_status_route(tutor_id: str):
                 }
                 return jsonify(TUTOR_PROCESSING_STATUS[tutor_id]), 200
             else:
+                 # If not in memory and not in DB (or no status yet), it's genuinely not found or not started
                  return jsonify({"error": "Tutor status not found for ID. Record may not exist or processing never started.", "tutor_id": tutor_id}), 404
         except Exception as e:
             print(f"Error fetching status from DB for tutor {tutor_id}: {e}")
@@ -395,11 +400,8 @@ def get_tutor_status_route(tutor_id: str):
 
 
 if __name__ == '__main__':
-    from .services.embedding_service import PERSIST_DIR_BASE as chroma_persist_dir # Relative import
+    from services.embedding_service import PERSIST_DIR_BASE as chroma_persist_dir
     os.makedirs(chroma_persist_dir, exist_ok=True)
-    
+    # Corrected host for Flask app run
     app.run(host='127.0.0.1', port=5001, debug=True)
-
-    
-
     
