@@ -11,7 +11,7 @@ import { BookOpen, Edit3, PlusSquare } from 'lucide-react';
 
 interface Repository {
   id: string;
-  name: string;
+  project_name: string; // Changed from name to project_name
 }
 
 export default function HomePage() {
@@ -22,18 +22,18 @@ export default function HomePage() {
   useEffect(() => {
     async function fetchRepositories() {
       try {
-        // Fetch from the relative path, Next.js dev server will proxy this
         const response = await fetch('/api/repos');
         if (!response.ok) {
-          throw new Error(`HTTP error! status: ${response.status}`);
+          const errorData = await response.json().catch(() => ({ error: "Failed to parse error from API" }));
+          throw new Error(`HTTP error! status: ${response.status}, Message: ${errorData.error || response.statusText}`);
         }
         const data: Repository[] = await response.json();
         setRepositories(data);
-      } catch (error) {
+      } catch (error: any) {
         console.error("Failed to fetch repositories:", error);
         setRepositories([]);
         let errorMessage = "Could not fetch repositories. Ensure the backend API server is running and accessible via /api/repos.";
-        if (error instanceof Error && error.message) {
+        if (error.message) {
           errorMessage += `\nDetails: ${error.message}`;
         }
         alert(errorMessage);
@@ -74,12 +74,12 @@ export default function HomePage() {
                 {repositories.length > 0 ? (
                   repositories.map((repo) => (
                     <SelectItem key={repo.id} value={repo.id} className="text-base">
-                      {repo.name}
+                      {repo.project_name} {/* Use project_name here */}
                     </SelectItem>
                   ))
                 ) : (
                   <SelectItem value="loading" disabled className="text-base">
-                    { "Failed to load or no repositories. Is the API server running?"}
+                    {repositories.length === 0 ? "No repositories found or failed to load. Is the API server running?" : "Loading..."}
                   </SelectItem>
                 )}
               </SelectContent>
@@ -93,7 +93,7 @@ export default function HomePage() {
               </Button>
             </Link>
             <Link href="/learn" passHref legacyBehavior>
-              <Button variant="default" size="lg" className="w-full text-base transition-all duration-200 ease-in-out hover:shadow-lg hover:scale-105 active:scale-95">
+              <Button variant="default" size="lg" className="w-full text-base transition-all duration-200 ease-in-out hover:shadow-lg hover:scale-105 active:scale-95" disabled={repositories.length === 0}>
                 <BookOpen className="mr-2 h-5 w-5" /> Learn
               </Button>
             </Link>
@@ -102,7 +102,7 @@ export default function HomePage() {
               size="lg"
               className="w-full text-base transition-all duration-200 ease-in-out hover:shadow-lg hover:scale-105 active:scale-95"
               onClick={handleEditClick}
-              disabled={repositories.length === 0 && !selectedRepoId}
+              disabled={!selectedRepoId || repositories.length === 0}
             >
               <Edit3 className="mr-2 h-5 w-5" /> Edit
             </Button>
