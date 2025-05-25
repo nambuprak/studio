@@ -22,7 +22,6 @@ import {
 } from '@/components/ui/sidebar';
 import { cn } from '@/lib/utils';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import type { TutorChatInput, TutorChatOutput } from '@/ai/flows/tutor-chat-flow';
 
 interface Message {
   id: string;
@@ -35,11 +34,12 @@ interface Message {
 interface TutorSession {
   id: string; // tutor_id from the database
   title: string; // project_name
-  lastActivity: Date; // Placeholder or actual last interaction time
-  status_message?: string; // For filtering
+  lastActivity: Date; 
+  status_message?: string; 
 }
 
-const generateClientId = () => 'id-' + Date.now().toString(36) + Math.random().toString(36).substring(2);
+const generateClientId = () => 'client-id-' + Date.now().toString(36) + Math.random().toString(36).substring(2);
+const getChatHistoryKey = (tutorId: string) => `chatHistory_${tutorId}`;
 
 const LearnPage: FC = () => {
   const [messages, setMessages] = useState<Message[]>([]);
@@ -48,6 +48,7 @@ const LearnPage: FC = () => {
   const [activeTutorId, setActiveTutorId] = useState<string | null>(null);
   const scrollViewportRef = useRef<HTMLDivElement>(null);
   const [isFetchingInitialData, setIsFetchingInitialData] = useState(true);
+  const [isAiResponding, setIsAiResponding] = useState(false);
 
 
   useEffect(() => {
@@ -63,13 +64,12 @@ const LearnPage: FC = () => {
         const formattedSessions: TutorSession[] = tutorsData
           .filter(tutor => {
             const status = (tutor.status_message || "").toLowerCase();
-            // Filter for tutors where processing is completed (either embedded or skipped)
             return status.startsWith("processing completed.");
           })
           .map(tutor => ({
             id: tutor.id,
             title: tutor.project_name,
-            lastActivity: new Date(), // Placeholder, ideally load last chat activity
+            lastActivity: new Date(), 
             status_message: tutor.status_message
         }));
 
@@ -78,10 +78,7 @@ const LearnPage: FC = () => {
 
         if (formattedSessions.length > 0) {
           const mostRecentSessionId = formattedSessions[0].id;
-          setActiveTutorId(mostRecentSessionId);
-          setMessages([
-            { id: generateClientId(), text: `Switched to tutor: ${formattedSessions[0].title}. Ask me anything about this project!`, sender: 'system', timestamp: new Date() },
-          ]);
+          selectTutorSession(mostRecentSessionId); // This will also load history
         } else {
           setMessages([{id: generateClientId(), text: "No tutors available for chat. Please ensure tutors are created and their processing is complete.", sender: 'system', timestamp: new Date()}]);
         }
@@ -92,6 +89,7 @@ const LearnPage: FC = () => {
       setIsFetchingInitialData(false);
     }
     fetchTutors();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
 
@@ -101,8 +99,30 @@ const LearnPage: FC = () => {
     }
   }, [messages]);
 
+  const loadChatHistory = (tutorId: string): Message[] => {
+    try {
+      const storedHistory = localStorage.getItem(getChatHistoryKey(tutorId));
+      if (storedHistory) {
+        const parsedHistory: Message[] = JSON.parse(storedHistory);
+        // Convert timestamp strings back to Date objects
+        return parsedHistory.map(msg => ({ ...msg, timestamp: new Date(msg.timestamp) }));
+      }
+    } catch (error) {
+      console.error("Error loading chat history from local storage:", error);
+    }
+    return [];
+  };
+
+  const saveChatHistory = (tutorId: string, currentMessages: Message[]) => {
+    try {
+      localStorage.setItem(getChatHistoryKey(tutorId), JSON.stringify(currentMessages));
+    } catch (error) {
+      console.error("Error saving chat history to local storage:", error);
+    }
+  };
+
   const handleSendMessage = async () => {
-    if (inputValue.trim() === '' || !activeTutorId) return;
+    if (inputValue.trim() === '' || !activeTutorId || isAiResponding) return;
 
     const userMessage: Message = {
       id: generateClientId(),
@@ -110,10 +130,14 @@ const LearnPage: FC = () => {
       sender: 'user',
       timestamp: new Date(),
     };
-    setMessages(prevMessages => [...prevMessages, userMessage]);
+    
+    const updatedMessages = [...messages, userMessage];
+    setMessages(updatedMessages);
+    saveChatHistory(activeTutorId, updatedMessages); // Save after user message
 
     const currentInput = inputValue;
     setInputValue('');
+    setIsAiResponding(true);
 
     const aiThinkingMessageId = generateClientId();
     const aiThinkingMessage: Message = {
@@ -126,11 +150,11 @@ const LearnPage: FC = () => {
     setMessages(prevMessages => [...prevMessages, aiThinkingMessage]);
 
     try {
-      const payload: TutorChatInput = {
-        tutorId: activeTutorId,
-        userQuery: currentInput,
+      const payload = { // Corresponds to ChatWithTutorInput in backend
+        tutor_id: activeTutorId,
+        user_query: currentInput,
       };
-      const response = await fetch('/api/flow/tutorChatFlow', {
+      const response = await fetch('/api/chat-with-tutor', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
@@ -141,24 +165,35 @@ const LearnPage: FC = () => {
         throw new Error(errorData.error || `AI service error: ${response.status}`);
       }
 
-      const result: TutorChatOutput = await response.json();
+      const result: { ai_response: string } = await response.json(); // Corresponds to ChatWithTutorOutput
       const aiResponseMessage: Message = {
         id: generateClientId(),
-        text: result.aiResponse,
+        text: result.ai_response,
         sender: 'ai',
         timestamp: new Date(),
       };
-      setMessages(prevMessages => prevMessages.map(m => m.id === aiThinkingMessageId ? aiResponseMessage : m));
+      
+      setMessages(prevMessages => {
+        const finalMessages = prevMessages.map(m => m.id === aiThinkingMessageId ? aiResponseMessage : m);
+        if(activeTutorId) saveChatHistory(activeTutorId, finalMessages); // Save after AI response
+        return finalMessages;
+      });
 
     } catch (error: any) {
-      console.error("Error calling Genkit flow:", error);
+      console.error("Error calling chat API:", error);
       const aiErrorMessage: Message = {
         id: generateClientId(),
         text: `Sorry, I encountered an error: ${error.message}`,
         sender: 'ai',
         timestamp: new Date(),
       };
-      setMessages(prevMessages => prevMessages.map(m => m.id === aiThinkingMessageId ? aiErrorMessage : m));
+      setMessages(prevMessages => {
+        const finalMessages = prevMessages.map(m => m.id === aiThinkingMessageId ? aiErrorMessage : m);
+         if(activeTutorId) saveChatHistory(activeTutorId, finalMessages); // Save after AI error
+        return finalMessages;
+      });
+    } finally {
+      setIsAiResponding(false);
     }
 
     setTutorSessions(prevSessions =>
@@ -170,11 +205,17 @@ const LearnPage: FC = () => {
 
   const selectTutorSession = (sessionId: string) => {
     setActiveTutorId(sessionId);
+    const historicalMessages = loadChatHistory(sessionId);
     const selectedSession = tutorSessions.find(s => s.id === sessionId);
-    setMessages([
-      { id: generateClientId(), text: `Switched to tutor: ${selectedSession?.title || 'this tutor'}. Ask me anything!`, sender: 'system', timestamp: new Date() }
-    ]);
-     if (activeTutorId) { // This condition seems off, should be sessionId
+    const systemMessage: Message = { 
+        id: generateClientId(), 
+        text: `Switched to tutor: ${selectedSession?.title || 'this tutor'}. Ask me anything!`, 
+        sender: 'system', 
+        timestamp: new Date() 
+    };
+    setMessages([...historicalMessages, systemMessage]);
+    
+    if (sessionId) { 
       setTutorSessions(prevSessions =>
         prevSessions.map(session =>
           session.id === sessionId ? { ...session, lastActivity: new Date() } : session
@@ -184,19 +225,27 @@ const LearnPage: FC = () => {
   };
 
   const handleDeleteChat = async (sessionId: string, event: React.MouseEvent) => {
-    event.stopPropagation(); // Prevent selecting the chat session
-    if (confirm(`Are you sure you want to delete the tutor "${tutorSessions.find(s => s.id === sessionId)?.title || 'this tutor'}"? This will delete its embedded data.`)) {
+    event.stopPropagation(); 
+    const tutorToDelete = tutorSessions.find(s => s.id === sessionId);
+    if (confirm(`Are you sure you want to delete the tutor "${tutorToDelete?.title || 'this tutor'}"? This will delete its embedded data and chat history.`)) {
       try {
         const response = await fetch(`/api/tutor-details/${sessionId}`, { method: 'DELETE' });
         if (!response.ok) {
           const errorData = await response.json().catch(() => ({}));
           throw new Error(errorData.error || `Failed to delete tutor: ${response.statusText}`);
         }
-        // Remove from UI
+        
+        localStorage.removeItem(getChatHistoryKey(sessionId)); // Remove chat history
+
         setTutorSessions(prev => prev.filter(s => s.id !== sessionId));
         if (activeTutorId === sessionId) {
-          setActiveTutorId(null);
-          setMessages([{id: generateClientId(), text: "Tutor deleted. Select another tutor or create a new one.", sender: 'system', timestamp: new Date()}]);
+          const remainingSessions = tutorSessions.filter(s => s.id !== sessionId);
+          if (remainingSessions.length > 0) {
+            selectTutorSession(remainingSessions[0].id);
+          } else {
+            setActiveTutorId(null);
+            setMessages([{id: generateClientId(), text: "Tutor deleted. Select another tutor or create a new one.", sender: 'system', timestamp: new Date()}]);
+          }
         }
         alert("Tutor deleted successfully.");
       } catch (error: any) {
@@ -208,7 +257,6 @@ const LearnPage: FC = () => {
 
   const handleRenameChat = (sessionId: string, event: React.MouseEvent) => {
     event.stopPropagation();
-    // Renaming actual project name requires backend update. This is a local label for now.
     const currentTitle = tutorSessions.find(s => s.id === sessionId)?.title || '';
     const newTitle = prompt("Enter new name for the tutor session (local label only):", currentTitle);
     if (newTitle && newTitle.trim() !== "") {
@@ -233,7 +281,7 @@ const LearnPage: FC = () => {
           <BookOpen className="h-6 w-6 text-primary" />
           <h1 className="text-xl font-semibold text-primary">Learn Mode</h1>
         </div>
-        <div className="w-[100px]" />
+        <div className="w-[100px]" /> {/* Spacer */}
       </div>
 
       <SidebarProvider defaultOpen={true}>
@@ -382,10 +430,10 @@ const LearnPage: FC = () => {
                     placeholder={activeTutorId ? "Type your message..." : "Select a tutor to chat"}
                     className="flex-1 min-h-[44px] max-h-[200px] resize-none text-sm p-2.5"
                     rows={1}
-                    disabled={!activeTutorId || isFetchingInitialData || messages.some(m => m.isLoading)}
+                    disabled={!activeTutorId || isFetchingInitialData || isAiResponding}
                   />
-                  <Button onClick={handleSendMessage} disabled={!inputValue.trim() || !activeTutorId || isFetchingInitialData || messages.some(m => m.isLoading)} className="h-[44px] w-[44px]" size="icon">
-                    <Send className="h-5 w-5" />
+                  <Button onClick={handleSendMessage} disabled={!inputValue.trim() || !activeTutorId || isFetchingInitialData || isAiResponding} className="h-[44px] w-[44px]" size="icon">
+                    {isAiResponding ? <Loader2 className="h-5 w-5 animate-spin" /> : <Send className="h-5 w-5" />}
                     <span className="sr-only">Send</span>
                   </Button>
                 </div>
@@ -399,5 +447,3 @@ const LearnPage: FC = () => {
 }
 
 export default LearnPage;
-
-    
