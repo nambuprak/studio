@@ -18,25 +18,25 @@ import {
   SidebarMenu,
   SidebarMenuItem,
   SidebarMenuButton,
-  SidebarInset, // Added SidebarInset here
+  SidebarInset,
 } from '@/components/ui/sidebar';
 import { cn } from '@/lib/utils';
-import { ScrollArea } from '@/components/ui/scroll-area'; 
-import type { TutorChatInput, TutorChatOutput } from '@/ai/flows/tutor-chat-flow'; // Import types
+import { ScrollArea } from '@/components/ui/scroll-area';
+import type { TutorChatInput, TutorChatOutput } from '@/ai/flows/tutor-chat-flow';
 
 interface Message {
   id: string;
   text: string;
   sender: 'user' | 'ai' | 'system';
   timestamp: Date;
-  isLoading?: boolean; // For AI thinking state
+  isLoading?: boolean;
 }
 
-interface TutorSession { // Renamed from ChatSession
-  id: string; // This will be the tutor_id from the database
-  title: string; // This will be the project_name
-  lastActivity: Date;
-  // Add other relevant tutor details if needed, e.g., source_location
+interface TutorSession {
+  id: string; // tutor_id from the database
+  title: string; // project_name
+  lastActivity: Date; // Placeholder or actual last interaction time
+  status_message?: string; // For filtering
 }
 
 const generateClientId = () => 'id-' + Date.now().toString(36) + Math.random().toString(36).substring(2);
@@ -45,7 +45,7 @@ const LearnPage: FC = () => {
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputValue, setInputValue] = useState<string>('');
   const [tutorSessions, setTutorSessions] = useState<TutorSession[]>([]);
-  const [activeTutorId, setActiveTutorId] = useState<string | null>(null); // Stores tutor_id
+  const [activeTutorId, setActiveTutorId] = useState<string | null>(null);
   const scrollViewportRef = useRef<HTMLDivElement>(null);
   const [isFetchingInitialData, setIsFetchingInitialData] = useState(true);
 
@@ -59,21 +59,20 @@ const LearnPage: FC = () => {
           throw new Error('Failed to fetch tutors');
         }
         const tutorsData: Array<{id: string, project_name: string, status_message?: string, discovered_files_count?: number}> = await response.json();
-        
+
         const formattedSessions: TutorSession[] = tutorsData
           .filter(tutor => {
-            const status = tutor.status_message || "";
-            // Check for completion messages, including those that mention embedding was skipped
-            return status.includes("Embedding process fully completed") || 
-                   status.includes("Embedding skipped") ||
-                   status.includes("Self Tutor configuration saved. Embedding skipped.");
+            const status = (tutor.status_message || "").toLowerCase();
+            // Filter for tutors where processing is completed (either embedded or skipped)
+            return status.startsWith("processing completed.");
           })
           .map(tutor => ({
             id: tutor.id,
             title: tutor.project_name,
             lastActivity: new Date(), // Placeholder, ideally load last chat activity
+            status_message: tutor.status_message
         }));
-        
+
         formattedSessions.sort((a, b) => b.lastActivity.getTime() - a.lastActivity.getTime());
         setTutorSessions(formattedSessions);
 
@@ -84,7 +83,7 @@ const LearnPage: FC = () => {
             { id: generateClientId(), text: `Switched to tutor: ${formattedSessions[0].title}. Ask me anything about this project!`, sender: 'system', timestamp: new Date() },
           ]);
         } else {
-          setMessages([{id: generateClientId(), text: "No tutors available for chat or none have completed processing. Please create a tutor and ensure embedding is complete or skipped.", sender: 'system', timestamp: new Date()}]);
+          setMessages([{id: generateClientId(), text: "No tutors available for chat. Please ensure tutors are created and their processing is complete.", sender: 'system', timestamp: new Date()}]);
         }
       } catch (error) {
         console.error("Error fetching tutors:", error);
@@ -112,7 +111,7 @@ const LearnPage: FC = () => {
       timestamp: new Date(),
     };
     setMessages(prevMessages => [...prevMessages, userMessage]);
-    
+
     const currentInput = inputValue;
     setInputValue('');
 
@@ -131,7 +130,6 @@ const LearnPage: FC = () => {
         tutorId: activeTutorId,
         userQuery: currentInput,
       };
-      // The Genkit Next.js plugin typically exposes flows at /api/flow/<flowName>
       const response = await fetch('/api/flow/tutorChatFlow', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -163,7 +161,6 @@ const LearnPage: FC = () => {
       setMessages(prevMessages => prevMessages.map(m => m.id === aiThinkingMessageId ? aiErrorMessage : m));
     }
 
-    // Update last activity for the current tutor session
     setTutorSessions(prevSessions =>
         prevSessions.map(session =>
           session.id === activeTutorId ? { ...session, lastActivity: new Date() } : session
@@ -177,7 +174,7 @@ const LearnPage: FC = () => {
     setMessages([
       { id: generateClientId(), text: `Switched to tutor: ${selectedSession?.title || 'this tutor'}. Ask me anything!`, sender: 'system', timestamp: new Date() }
     ]);
-     if (activeTutorId) {
+     if (activeTutorId) { // This condition seems off, should be sessionId
       setTutorSessions(prevSessions =>
         prevSessions.map(session =>
           session.id === sessionId ? { ...session, lastActivity: new Date() } : session
@@ -186,21 +183,34 @@ const LearnPage: FC = () => {
     }
   };
 
-  // handleDeleteChat and handleRenameChat might need to be re-evaluated
-  // Deleting a chat session here means deleting the tutor context, which is a bigger operation.
-  // Renaming might just be a client-side label or updating the tutor's project_name.
-  // For now, these are kept simple or could be removed if they don't fit the "tutor session" model.
-
-  const handleDeleteChat = (sessionId: string, event: React.MouseEvent) => {
-    event.stopPropagation();
-    alert(`Deletion of tutor context (ID: ${sessionId}) needs backend implementation.`);
-    // Implement actual tutor deletion if required, including ChromaDB cleanup and DB record removal.
+  const handleDeleteChat = async (sessionId: string, event: React.MouseEvent) => {
+    event.stopPropagation(); // Prevent selecting the chat session
+    if (confirm(`Are you sure you want to delete the tutor "${tutorSessions.find(s => s.id === sessionId)?.title || 'this tutor'}"? This will delete its embedded data.`)) {
+      try {
+        const response = await fetch(`/api/tutor-details/${sessionId}`, { method: 'DELETE' });
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({}));
+          throw new Error(errorData.error || `Failed to delete tutor: ${response.statusText}`);
+        }
+        // Remove from UI
+        setTutorSessions(prev => prev.filter(s => s.id !== sessionId));
+        if (activeTutorId === sessionId) {
+          setActiveTutorId(null);
+          setMessages([{id: generateClientId(), text: "Tutor deleted. Select another tutor or create a new one.", sender: 'system', timestamp: new Date()}]);
+        }
+        alert("Tutor deleted successfully.");
+      } catch (error: any) {
+        alert(`Error deleting tutor: ${error.message}`);
+        console.error("Error deleting tutor:", error);
+      }
+    }
   };
-  
+
   const handleRenameChat = (sessionId: string, event: React.MouseEvent) => {
     event.stopPropagation();
+    // Renaming actual project name requires backend update. This is a local label for now.
     const currentTitle = tutorSessions.find(s => s.id === sessionId)?.title || '';
-    const newTitle = prompt("Enter new name for the tutor session (this is a local label for now):", currentTitle);
+    const newTitle = prompt("Enter new name for the tutor session (local label only):", currentTitle);
     if (newTitle && newTitle.trim() !== "") {
       setTutorSessions(prevSessions =>
         prevSessions.map(session =>
@@ -223,23 +233,19 @@ const LearnPage: FC = () => {
           <BookOpen className="h-6 w-6 text-primary" />
           <h1 className="text-xl font-semibold text-primary">Learn Mode</h1>
         </div>
-        <div className="w-[100px]" /> 
+        <div className="w-[100px]" />
       </div>
 
       <SidebarProvider defaultOpen={true}>
         <div className="flex flex-1 overflow-hidden">
-          <Sidebar 
-            side="left" 
-            variant="sidebar" 
-            collapsible="icon" 
+          <Sidebar
+            side="left"
+            variant="sidebar"
+            collapsible="icon"
             className="bg-card border-r data-[collapsed=true]:bg-background md:data-[collapsed=true]:bg-card dark:bg-slate-800 dark:border-slate-700"
           >
             <SidebarHeader className="p-2">
-              {/* "New Chat" button's role is less clear now, maybe it refreshes tutor list or clears current chat?
-                 For now, it's disabled if no tutors are available.
-                 A better "New Chat" might involve selecting a different tutor not yet in a session.
-              */}
-               <Button variant="outline" className="w-full justify-start h-9" onClick={() => alert("New Chat functionality to be defined. Select a tutor from the list.")} disabled={tutorSessions.length === 0}>
+               <Button variant="outline" className="w-full justify-start h-9" onClick={() => alert("To start a new 'chat', create a new Tutor or select an existing one from the list.")} disabled={tutorSessions.length === 0 && !isFetchingInitialData}>
                 <PlusCircle className="mr-2 h-4 w-4" />
                 <span className="group-data-[collapsible=icon]:hidden">New Chat</span>
               </Button>
@@ -250,7 +256,7 @@ const LearnPage: FC = () => {
                   {isFetchingInitialData && <div className="p-4 text-center text-xs text-muted-foreground group-data-[collapsible=icon]:hidden">Loading tutors... <Loader2 className="inline-block ml-1 h-3 w-3 animate-spin"/></div>}
                   {!isFetchingInitialData && tutorSessions.length === 0 && (
                      <div className="p-4 text-center text-xs text-muted-foreground group-data-[collapsible=icon]:hidden">
-                      No tutors available for chat. Go to "Create Tutor" to set one up.
+                      No tutors ready for chat. Go to "Create Tutor" to set one up.
                     </div>
                   )}
                   {tutorSessions.map((session) => (
@@ -267,13 +273,12 @@ const LearnPage: FC = () => {
                         <MessageSquarePlus className="h-4 w-4 mr-2 flex-shrink-0"/>
                         <span className="truncate flex-grow group-data-[collapsible=icon]:hidden">{session.title}</span>
                       </SidebarMenuButton>
-                      {/* Edit/Delete on tutor sessions might require backend changes for persistence */}
                       <div className="absolute right-1 top-1/2 -translate-y-1/2 flex opacity-0 group-hover/menu-item:opacity-100 group-data-[collapsible=icon]:hidden transition-opacity">
                         <Button variant="ghost" size="icon" className="h-7 w-7" onClick={(e) => handleRenameChat(session.id, e)} title="Rename (local label)">
                           <Edit3 className="h-3.5 w-3.5"/>
                           <span className="sr-only">Rename</span>
                         </Button>
-                        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={(e) => handleDeleteChat(session.id, e)} title="Delete Tutor (not implemented)">
+                        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={(e) => handleDeleteChat(session.id, e)} title="Delete Tutor">
                           <Trash2 className="h-3.5 w-3.5 text-destructive"/>
                           <span className="sr-only">Delete</span>
                         </Button>
@@ -293,6 +298,7 @@ const LearnPage: FC = () => {
                     </SidebarMenuButton>
                   </Link>
                 </SidebarMenuItem>
+                {/* Placeholder for Settings and Logout */}
               </SidebarMenu>
             </SidebarFooter>
           </Sidebar>
@@ -326,9 +332,9 @@ const LearnPage: FC = () => {
                           "p-3 rounded-xl shadow-sm break-words text-sm",
                           msg.sender === 'user'
                             ? 'bg-primary text-primary-foreground rounded-br-none'
-                            : msg.sender === 'system' 
+                            : msg.sender === 'system'
                               ? 'bg-accent text-accent-foreground rounded-bl-none w-full max-w-full text-center'
-                              : 'bg-muted text-foreground rounded-bl-none dark:bg-slate-700 dark:text-slate-50' 
+                              : 'bg-muted text-foreground rounded-bl-none dark:bg-slate-700 dark:text-slate-50'
                         )}
                       >
                         {msg.isLoading ? <Loader2 className="h-5 w-5 animate-spin" /> : <p>{msg.text}</p>}
@@ -354,7 +360,7 @@ const LearnPage: FC = () => {
                       No messages yet. Send a message to start the conversation with {tutorSessions.find(s=>s.id === activeTutorId)?.title}.
                     </div>
                   )}
-                  {!activeTutorId && !isFetchingInitialData && (
+                  {!activeTutorId && !isFetchingInitialData && tutorSessions.length > 0 && (
                      <div className="text-center text-muted-foreground pt-10">
                       Please select a tutor from the sidebar to start chatting.
                     </div>
@@ -374,11 +380,11 @@ const LearnPage: FC = () => {
                       }
                     }}
                     placeholder={activeTutorId ? "Type your message..." : "Select a tutor to chat"}
-                    className="flex-1 min-h-[44px] max-h-[200px] resize-none text-sm p-2.5" 
+                    className="flex-1 min-h-[44px] max-h-[200px] resize-none text-sm p-2.5"
                     rows={1}
-                    disabled={!activeTutorId || isFetchingInitialData}
+                    disabled={!activeTutorId || isFetchingInitialData || messages.some(m => m.isLoading)}
                   />
-                  <Button onClick={handleSendMessage} disabled={!inputValue.trim() || !activeTutorId || isFetchingInitialData} className="h-[44px] w-[44px]" size="icon">
+                  <Button onClick={handleSendMessage} disabled={!inputValue.trim() || !activeTutorId || isFetchingInitialData || messages.some(m => m.isLoading)} className="h-[44px] w-[44px]" size="icon">
                     <Send className="h-5 w-5" />
                     <span className="sr-only">Send</span>
                   </Button>
