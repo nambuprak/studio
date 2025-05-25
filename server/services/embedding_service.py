@@ -11,16 +11,23 @@ from chromadb.api.models.Collection import Collection as ChromaCollection
 # from langchain_community.document_loaders import TextLoader # Not directly used here, file content read manually
 from langchain.text_splitter import CharacterTextSplitter
 
-# Environment variables for embedding API (ensure these are set)
-EMBEDDING_MODEL_NAME = os.getenv("EMBEDDING_MODEL", "text-embedding-ada-002") # Example, use your actual model
+# Environment variables for embedding API
+# Use your actual model name if different from "text-embedding-ada-002"
+EMBEDDING_MODEL_NAME = os.getenv("EMBEDDING_MODEL_NAME", "text-embedding-ada-002")
+# Get custom embedding API URL and Token from environment variables
+CUSTOM_EMBEDDING_API_URL = os.getenv("CUSTOM_EMBEDDING_API_URL", "https://aienablement-api.mycompany.com/embeddings")
+CUSTOM_EMBEDDING_API_TOKEN = os.getenv("CUSTOM_EMBEDDING_API_TOKEN")
 
-# Base directory for ChromaDB persistence. Will be created if it doesn't exist.
-# This places chroma_db_store inside the 'server' directory.
+if CUSTOM_EMBEDDING_API_TOKEN is None:
+    print("Warning: CUSTOM_EMBEDDING_API_TOKEN environment variable is not set. Using placeholder token.")
+    CUSTOM_EMBEDDING_API_TOKEN = "Bearer token12345678" # Fallback, but ideally script should fail or warn prominently
+
+# Base directory for ChromaDB persistence.
 PERSIST_DIR_BASE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "chroma_db_store")
 
 # Embedding API call settings
 MAX_RETRIES_EMBEDDING = 1 # Max retries for the embedding API call
-RETRY_BACKOFF_FACTOR_EMBEDDING = 2 # Seconds, for exponential backoff (though currently linear for 1 retry)
+RETRY_BACKOFF_FACTOR_EMBEDDING = 2 # Seconds
 
 # Ensure the ChromaDB persistence directory exists
 os.makedirs(PERSIST_DIR_BASE, exist_ok=True)
@@ -50,7 +57,7 @@ def _update_status_safely(status_dict: Optional[Dict[str, Any]], message: Option
     if progress_detail:
         status_dict["progress_detail"] = progress_detail
         # If no specific message is set, or if the current message is generic, update with progress_detail
-        if not status_dict.get("message") or "processing" in status_dict.get("message", "").lower() or "embedding" in status_dict.get("message", "").lower() :
+        if not status_dict.get("message") or status_dict.get("message", "").lower().startswith(("processing", "embedding","starting","cloning")):
              status_dict["message"] = progress_detail # Make progress detail the main message if appropriate
         print(f"{log_prefix}Progress: {progress_detail}")
 
@@ -60,12 +67,11 @@ def get_embedding_for_text(text: str, status_dict: Optional[dict] = None) -> Opt
     Gets embedding for a single text string using the custom API.
     Updates status_dict with errors if any.
     """
-    # Replace with your actual embedding API details
-    url = "https://aienablement-api.mycompany.com/embeddings"
+    url = CUSTOM_EMBEDDING_API_URL
     headers = {
         "accept": "application/json",
-        "azure-deployment-version": "2024-02-01", # Example, use your version
-        "Authorization": "Bearer token12345678", # HARDCODED TOKEN - VERY INSECURE FOR PRODUCTION
+        "azure-deployment-version": os.getenv("EMBEDDING_API_VERSION", "2024-02-01"), # Example, make configurable
+        "Authorization": CUSTOM_EMBEDDING_API_TOKEN,
         "Content-Type": "application/json"
     }
     payload = {"model": EMBEDDING_MODEL_NAME, "input": text}
@@ -81,7 +87,7 @@ def get_embedding_for_text(text: str, status_dict: Optional[dict] = None) -> Opt
                 return embedding_data["data"][0]["embedding"]
             else:
                 err_msg = f"Invalid embedding response format for text: '{text[:50]}...'"
-                if status_dict: _update_status_safely(status_dict, error=err_msg)
+                if status_dict: _update_status_safely(status_dict, error=err_msg, progress_detail=err_msg)
                 else: print(err_msg)
                 return None # Or raise an error
         except requests.exceptions.RequestException as e:

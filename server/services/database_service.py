@@ -46,11 +46,11 @@ def save_tutor_config(tutor_id: str, project_name: str, input_type: str, source_
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
-        # Using INSERT OR REPLACE for simplicity, especially if tutor_id could be re-used in some dev scenarios.
-        # For strict updates, an UPDATE statement would be preferred for existing IDs.
+        # Using INSERT OR REPLACE for simplicity. This will update existing records if tutor_id matches.
         # COALESCE is used to preserve existing values for some fields if this is a REPLACE operation on an existing ID.
+        # For `created_at`, we only set it if it's a new record. For REPLACE, we want to keep the original created_at.
         cursor.execute('''
-            INSERT OR REPLACE INTO tutors (
+            INSERT INTO tutors (
                 id, project_name, input_type, source_location, repo_overview, tap_bap, 
                 file_types, exclude_folders, additional_info_list, embed_repo,
                 status_message, created_at, discovered_files_count, processing_error
@@ -60,11 +60,24 @@ def save_tutor_config(tutor_id: str, project_name: str, input_type: str, source_
                     COALESCE((SELECT discovered_files_count FROM tutors WHERE id = ?), NULL),
                     COALESCE((SELECT processing_error FROM tutors WHERE id = ?), NULL)
             )
+            ON CONFLICT(id) DO UPDATE SET
+                project_name=excluded.project_name,
+                input_type=excluded.input_type,
+                source_location=excluded.source_location,
+                repo_overview=excluded.repo_overview,
+                tap_bap=excluded.tap_bap,
+                file_types=excluded.file_types,
+                exclude_folders=excluded.exclude_folders,
+                additional_info_list=excluded.additional_info_list,
+                embed_repo=excluded.embed_repo,
+                status_message=excluded.status_message
+                -- created_at is not updated on conflict to preserve original creation time
+                -- discovered_files_count and processing_error are updated by update_tutor_processing_details
         ''', (
             tutor_id, project_name, input_type, source_location, repo_overview, tap_bap,
             file_types_str, exclude_folders_str, additional_info_list_json,
             1 if embed_repo_flag else 0, initial_status_message,
-            tutor_id, tutor_id, tutor_id # For COALESCE to preserve existing values on REPLACE for these fields
+            tutor_id, tutor_id, tutor_id # For COALESCE in the VALUES part
         ))
         conn.commit()
     except sqlite3.Error as e:
@@ -100,8 +113,7 @@ def get_all_tutors() -> List[Dict[str, Any]]:
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
-        # Fetch all relevant fields for the tutor list display in Home/Edit pages
-        # Renaming project_name to name for frontend consistency if needed, but keeping it project_name here
+        # Fetch all relevant fields for the tutor list display
         cursor.execute("SELECT id, project_name, source_location, input_type, status_message, discovered_files_count FROM tutors ORDER BY created_at DESC")
         tutors_rows = cursor.fetchall()
         if not tutors_rows:
@@ -133,6 +145,7 @@ def get_tutor_by_id(tutor_id: str) -> Optional[Dict[str, Any]]:
                 tutor_data['additional_info_list'] = [] # Ensure it's an empty list if NULL or empty string
             
             # Ensure boolean embed_repo is correctly represented
+            # SQLite stores booleans as 0 or 1
             tutor_data['embed_repo'] = bool(tutor_data.get('embed_repo', 0))
 
             return tutor_data
