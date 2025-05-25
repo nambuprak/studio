@@ -14,10 +14,10 @@ import httpx
 import certifi
 
 # Relative imports for services within the same package
-from .services.database_service import init_db, save_tutor_config, get_all_tutors, get_tutor_by_id, update_tutor_processing_details
-from .services.processing_service import process_repository_content
-from .services.utils import extract_project_name_from_url, extract_project_name_from_path
-from .services.embedding_service import query_chroma_for_tutor, delete_chroma_collection_for_tutor
+from services.database_service import init_db, save_tutor_config, get_all_tutors, get_tutor_by_id, update_tutor_processing_details
+from services.processing_service import process_repository_content
+from services.utils import extract_project_name_from_url, extract_project_name_from_path
+from services.embedding_service import query_chroma_for_tutor, delete_chroma_collection_for_tutor
 
 app = Flask(__name__)
 CORS(app)
@@ -267,7 +267,7 @@ def delete_tutor_route(tutor_id: str):
         delete_chroma_collection_for_tutor(tutor_id)
         print(f"Successfully requested deletion of ChromaDB collection for tutor_id: {tutor_id} (or it didn't exist).")
 
-        from .services.database_service import get_db_connection 
+        from services.database_service import get_db_connection 
         conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute("DELETE FROM tutors WHERE id = ?", (tutor_id,))
@@ -298,6 +298,18 @@ def analyze_repo_route():
 
     tutor_id = str(uuid.uuid4())
     project_name_to_use = data.project_name
+
+    if data.input_type == 'url':
+        project_name_to_use = extract_project_name_from_url(data.source_location)
+    elif data.input_type == 'folder':
+        # If user provided a project name, use that, otherwise extract from path
+        if not data.project_name: # Check if user specifically cleared it or it was empty
+             project_name_to_use = extract_project_name_from_path(data.source_location)
+        # else project_name_to_use remains data.project_name
+    
+    # Overwrite data.project_name with the derived or confirmed name for consistency in the background task
+    data.project_name = project_name_to_use
+
 
     if data.embed_repo:
         TUTOR_PROCESSING_STATUS[tutor_id] = {
@@ -355,7 +367,7 @@ def get_tutor_status_route(tutor_id: str):
     if not status_info:
         conn = None
         try:
-            from .services.database_service import get_db_connection 
+            from services.database_service import get_db_connection 
             conn = get_db_connection()
             cursor = conn.cursor()
             cursor.execute("SELECT project_name, status_message, discovered_files_count, processing_error FROM tutors WHERE id = ?", (tutor_id,))
@@ -508,3 +520,6 @@ def chat_with_tutor_route():
 
 if __name__ == '__main__':
     app.run(host='127.0.0.1', port=5001, debug=True)
+
+
+    
