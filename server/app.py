@@ -13,18 +13,17 @@ from openai import AzureOpenAI
 import httpx
 import certifi
 
-# Use direct imports if server directory is in PYTHONPATH or running app.py from server dir
-from services.database_service import init_db, save_tutor_config, get_all_tutors, get_tutor_by_id, update_tutor_processing_details
+from services.database_service import init_db, save_tutor_config, get_all_tutors, get_tutor_by_id, update_tutor_processing_details, get_db_connection
 from services.processing_service import process_repository_content
 from services.utils import extract_project_name_from_url, extract_project_name_from_path
-from services.embedding_service import query_chroma_for_tutor, delete_chroma_collection_for_tutor
+from services.embedding_service import query_chroma_for_tutor, delete_chroma_collection_for_tutor, _update_status_safely as update_embedding_status_safely
+
 
 app = Flask(__name__)
 CORS(app)
 
 init_db() # Ensures DB and table are created on startup
 
-# In-memory store for processing status (POC only - not suitable for production with multiple workers)
 TUTOR_PROCESSING_STATUS: Dict[str, Dict[str, Any]] = {}
 
 
@@ -33,7 +32,7 @@ class AdditionalInfoItemInput(BaseModel):
     description: str
 
 class CreateTutorInput(BaseModel):
-    project_name: str # Now a direct input
+    project_name: str 
     input_type: str
     source_location: str
     repo_overview: str = ""
@@ -79,21 +78,11 @@ def _perform_long_repository_processing(tutor_id: str, data: CreateTutorInput, a
         project_name_from_data = data.project_name
         print(f"Background task started for tutor_id: {tutor_id}, project: {project_name_from_data}")
 
-        current_status: Dict[str, Any] = {
-            "status": "PROCESSING_DB_SAVE",
-            "message": f"Saving initial configuration for {project_name_from_data}...",
-            "project_name": project_name_from_data,
-            "tutor_id": tutor_id,
-            "discovered_files_count": 0,
-            "error": None
-        }
-        # Ensure this status_dict is updated in TUTOR_PROCESSING_STATUS immediately
-        # so the polling endpoint can see it.
-        if tutor_id in TUTOR_PROCESSING_STATUS:
-            TUTOR_PROCESSING_STATUS[tutor_id].update(current_status)
-        else:
-            TUTOR_PROCESSING_STATUS[tutor_id] = current_status
-
+        # current_status is a reference to the dict in TUTOR_PROCESSING_STATUS
+        current_status: Dict[str, Any] = TUTOR_PROCESSING_STATUS.get(tutor_id, {})
+        
+        # Initial status update for the background task
+        update_embedding_status_safely(current_status, status="PROCESSING_DB_SAVE", message=f"Saving initial configuration for {project_name_from_data}...")
 
         try:
             parsed_additional_info_list = [item.model_dump() for item in data.additional_info_list]
@@ -110,17 +99,18 @@ def _perform_long_repository_processing(tutor_id: str, data: CreateTutorInput, a
                 embed_repo_flag=data.embed_repo,
                 initial_status_message="Configuration saved. Awaiting processing."
             )
-            _update_status_safely(current_status, message="Configuration saved. Starting repository processing if embedding is enabled...")
+            update_embedding_status_safely(current_status, message="Configuration saved. Starting repository processing if embedding is enabled...")
             print(f"Configuration saved for tutor_id: {tutor_id}")
 
             discovered_files_count = 0
-            final_status_message = ""
+            final_processing_message_from_service = ""
 
             if data.embed_repo:
                 print(f"Starting repository content processing (including embedding) for tutor_id: {tutor_id}")
-                _update_status_safely(current_status, status="PROCESSING_EMBEDDING", message=f"Processing and embedding repository content for {project_name_from_data}...")
+                update_embedding_status_safely(current_status, status="PROCESSING_EMBEDDING", message=f"Processing and embedding repository content for {project_name_from_data}...")
 
-                discovered_files_count, processing_message_from_service = process_repository_content(
+                # process_repository_content will update current_status (status_dict) directly
+                discovered_files_count, final_processing_message_from_service = process_repository_content(
                     input_type=data.input_type,
                     source_location=data.source_location,
                     file_types_str=data.file_types,
@@ -129,63 +119,51 @@ def _perform_long_repository_processing(tutor_id: str, data: CreateTutorInput, a
                     embed_repo_flag=data.embed_repo,
                     repo_overview=data.repo_overview,
                     additional_info_list=parsed_additional_info_list,
-                    status_dict=current_status # Pass the status dict here
+                    status_dict=current_status 
                 )
                 current_status["discovered_files_count"] = discovered_files_count
-                final_status_message = current_status.get("message", "Processing completed. Repository embedded.") # Get final message from status_dict
-                if "error" in current_status and current_status["error"]:
-                    final_status_message = f"Processing failed: {current_status['error']}"
-                _update_status_safely(current_status, message=final_status_message) # Ensure status_dict has the final message
-                print(f"Repository processing completed for {tutor_id}. Files: {discovered_files_count}. Msg: {final_status_message}")
+                # The message in current_status should reflect the outcome of embedding.
+                print(f"Repository processing completed for {tutor_id}. Files: {discovered_files_count}. Msg from service: {final_processing_message_from_service}")
             else:
-                final_status_message = "Processing completed. Embedding skipped."
-                _update_status_safely(current_status, message=final_status_message)
+                final_processing_message_from_service = "Processing completed. Embedding skipped."
+                update_embedding_status_safely(current_status, message=final_processing_message_from_service, status="COMPLETED_NO_EMBEDDING")
                 print(f"Embedding skipped for tutor_id: {tutor_id}")
+
+            # Update database with the final status and details
+            # The message in current_status should be the most accurate one from the service or error handling.
+            db_status_message = current_status.get("message", "Processing finalized.")
+            if current_status.get("error"):
+                db_status_message = f"Error: {current_status.get('error')}"
+
 
             update_tutor_processing_details(
                 tutor_id=tutor_id,
-                status_message=final_status_message, # Use the final_status_message
+                status_message=db_status_message, 
                 discovered_files_count=discovered_files_count if data.embed_repo else None,
                 processing_error=current_status.get("error")
             )
-            _update_status_safely(current_status, status="COMPLETED" if not current_status.get("error") else "FAILED", message=final_status_message)
+            
+            # Set final status in TUTOR_PROCESSING_STATUS
+            final_overall_status = "FAILED" if current_status.get("error") else "COMPLETED"
+            update_embedding_status_safely(current_status, status=final_overall_status, message=db_status_message)
+
 
         except Exception as e:
             print(f"Error during background processing for tutor_id {tutor_id}: {e}")
-            error_message_for_status = f"Processing failed for {project_name_from_data}: {str(e)}"
-            _update_status_safely(current_status, status="FAILED", message=error_message_for_status, error=str(e))
+            error_message_for_status = f"Background processing failed for {project_name_from_data}: {str(e)}"
+            update_embedding_status_safely(current_status, status="FAILED", message=error_message_for_status, error=str(e))
 
             try:
                 update_tutor_processing_details(
                     tutor_id=tutor_id,
-                    status_message="Processing failed.",
+                    status_message=error_message_for_status, # Ensure this error message is in DB
                     discovered_files_count=current_status.get("discovered_files_count", 0),
                     processing_error=str(e)
                 )
             except Exception as db_error:
                 print(f"Critical: Failed to update DB with error status for {tutor_id}: {db_error}")
 
-        print(f"Background task finished for {tutor_id}. Final Status: {TUTOR_PROCESSING_STATUS.get(tutor_id, {}).get('status')}")
-
-
-def _update_status_safely(status_dict: Optional[Dict[str, Any]], message: Optional[str] = None, status: Optional[str] = None, error: Optional[str] = None, progress_detail: Optional[str] = None):
-    if status_dict is None:
-        return
-    if message:
-        status_dict["message"] = message
-    if status:
-        status_dict["status"] = status
-    if error:
-        status_dict["error"] = error
-    if progress_detail: 
-        status_dict["progress_detail"] = progress_detail
-        # Update main message only if it's a generic processing/embedding message or empty, and not a final status
-        current_msg_lower = status_dict.get("message", "").lower()
-        is_final_status_msg = "completed" in current_msg_lower or "failed" in current_msg_lower
-        if not is_final_status_msg:
-            if not current_msg_lower or any(kw in current_msg_lower for kw in ["processing", "embedding","starting","cloning", "initializing", "discovered", "split", "embedding chunk"]):
-                 status_dict["message"] = progress_detail
-
+        print(f"Background task finished for {tutor_id}. Final Status in memory: {TUTOR_PROCESSING_STATUS.get(tutor_id, {}).get('status')}")
 
 
 @app.route('/api/repos', methods=['GET'])
@@ -219,7 +197,6 @@ def update_tutor_details_route(tutor_id: str):
         return jsonify({"error": f"Error parsing request: {str(e)}"}), 400
 
     try:
-        # For PUT, we just update the config. If embed_repo is true, re-processing is needed.
         save_tutor_config(
             tutor_id=tutor_id,
             project_name=data.project_name,
@@ -235,7 +212,6 @@ def update_tutor_details_route(tutor_id: str):
         )
 
         if data.embed_repo:
-            # Delete existing ChromaDB collection before re-processing to avoid duplicate data
             try:
                 print(f"Update: Deleting existing ChromaDB collection for tutor {tutor_id} before re-embedding.")
                 delete_chroma_collection_for_tutor(tutor_id)
@@ -257,8 +233,6 @@ def update_tutor_details_route(tutor_id: str):
                 "project_name": data.project_name
             }), 202 
         else:
-            # If embedding is not enabled, update details to reflect this.
-            # Also, delete ChromaDB data if it existed and embedding is now disabled.
             try:
                 print(f"Update: Embedding disabled for tutor {tutor_id}. Deleting ChromaDB collection if it exists.")
                 delete_chroma_collection_for_tutor(tutor_id)
@@ -275,7 +249,7 @@ def update_tutor_details_route(tutor_id: str):
                 TUTOR_PROCESSING_STATUS[tutor_id]["status"] = "COMPLETED"
                 TUTOR_PROCESSING_STATUS[tutor_id]["message"] = "Processing completed. Embedding skipped."
                 if "discovered_files_count" in TUTOR_PROCESSING_STATUS[tutor_id]:
-                    TUTOR_PROCESSING_STATUS[tutor_id]["discovered_files_count"] = None
+                    TUTOR_PROCESSING_STATUS[tutor_id]["discovered_files_count"] = None # Clear count if embedding disabled
             return jsonify({
                 "message": "Self Tutor configuration updated successfully. Embedding not enabled.",
                 "tutor_id": tutor_id,
@@ -292,10 +266,9 @@ def delete_tutor_route(tutor_id: str):
     conn = None
     try:
         print(f"Attempting to delete ChromaDB collection for tutor_id: {tutor_id}")
-        delete_chroma_collection_for_tutor(tutor_id) # This now handles physical deletion attempts
+        delete_chroma_collection_for_tutor(tutor_id) 
         print(f"Successfully requested deletion of ChromaDB collection and its data for tutor_id: {tutor_id} (or it didn't exist).")
 
-        # from services.database_service import get_db_connection # Already imported
         conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute("DELETE FROM tutors WHERE id = ?", (tutor_id,))
@@ -325,19 +298,16 @@ def analyze_repo_route():
         return jsonify({"error": f"Error parsing request JSON: {str(e)}"}), 400
 
     tutor_id = str(uuid.uuid4())
-    # Use the project_name directly from the validated input
     project_name_to_use = data.project_name
-
-    # No longer deriving project_name from source_location here, as it's a direct input.
-    # data.project_name is already validated by Pydantic to not be empty.
 
     if data.embed_repo:
         TUTOR_PROCESSING_STATUS[tutor_id] = {
-            "status": "PENDING",
+            "status": "PENDING", # Initial status before thread starts
             "message": f"Processing initiated for {project_name_to_use}...",
             "project_name": project_name_to_use,
             "tutor_id": tutor_id,
-            "error": None
+            "error": None,
+            "discovered_files_count": 0 # Initialize
         }
         thread = threading.Thread(target=_perform_long_repository_processing, args=(tutor_id, data, app.app_context()))
         thread.start()
@@ -346,7 +316,7 @@ def analyze_repo_route():
             "message": "Self Tutor processing initiated. Check status for updates.",
             "tutor_id": tutor_id,
             "project_name": project_name_to_use
-        }), 202
+        }), 202 # Accepted
     else: 
         try:
             parsed_additional_info_list = [item.model_dump() for item in data.additional_info_list]
@@ -361,26 +331,19 @@ def analyze_repo_route():
                 exclude_folders_str=data.exclude_folders,
                 additional_info_list_json=json.dumps(parsed_additional_info_list),
                 embed_repo_flag=data.embed_repo,
-                initial_status_message="Configuration saved." 
+                initial_status_message="Processing completed. Embedding skipped." # Set final message directly
             )
-            final_status_message = "Processing completed. Embedding skipped."
-            update_tutor_processing_details(
-                tutor_id=tutor_id,
-                status_message=final_status_message,
-                discovered_files_count=None, 
-                processing_error=None
-            )
-            # Update in-memory status for consistency if polled immediately
+            # No need to call update_tutor_processing_details if save_tutor_config handles the final status for non-embed cases
             TUTOR_PROCESSING_STATUS[tutor_id] = {
                 "status": "COMPLETED",
-                "message": final_status_message,
+                "message": "Processing completed. Embedding skipped.",
                 "project_name": project_name_to_use,
                 "tutor_id": tutor_id,
-                "discovered_files_count": None,
+                "discovered_files_count": None, # No files processed for embedding
                 "error": None
             }
             return jsonify({
-                "message": final_status_message,
+                "message": "Processing completed. Embedding skipped.",
                 "tutor_id": tutor_id,
                 "project_name": project_name_to_use,
                 "discovered_files_count": "N/A (Embedding skipped)"
@@ -396,9 +359,9 @@ def get_tutor_status_route(tutor_id: str):
     if not status_info:
         conn = None
         try:
-            # from services.database_service import get_db_connection # Already imported
             conn = get_db_connection()
             cursor = conn.cursor()
+            # Fetch all relevant details including project_name
             cursor.execute("SELECT project_name, status_message, discovered_files_count, processing_error FROM tutors WHERE id = ?", (tutor_id,))
             row = cursor.fetchone()
             if row:
@@ -407,14 +370,14 @@ def get_tutor_status_route(tutor_id: str):
                 db_discovered_files: Optional[int] = row["discovered_files_count"]
                 db_processing_error: Optional[str] = row["processing_error"]
 
-                current_status_from_db = "UNKNOWN_COMPLETED" 
-                if db_processing_error or "failed" in (db_status_message or "").lower():
+                current_status_from_db = "UNKNOWN_COMPLETED" # Default if status message is generic
+                if db_processing_error or (db_status_message and "failed" in db_status_message.lower()):
                     current_status_from_db = "FAILED"
-                elif (db_status_message or "").lower().startswith("processing completed."):
+                elif db_status_message and db_status_message.lower().startswith("processing completed."):
                      current_status_from_db = "COMPLETED"
                 
-                # Populate in-memory store if fetched from DB for subsequent polls
-                TUTOR_PROCESSING_STATUS[tutor_id] = {
+                # Populate in-memory store if fetched from DB for subsequent polls for this app instance
+                status_info = {
                     "status": current_status_from_db,
                     "message": db_status_message or "Status retrieved from DB.",
                     "project_name": db_project_name,
@@ -422,7 +385,8 @@ def get_tutor_status_route(tutor_id: str):
                     "discovered_files_count": db_discovered_files,
                     "error": db_processing_error
                 }
-                return jsonify(TUTOR_PROCESSING_STATUS[tutor_id]), 200
+                TUTOR_PROCESSING_STATUS[tutor_id] = status_info # Cache it
+                return jsonify(status_info), 200
             else:
                  return jsonify({"error": "Tutor status not found for ID.", "tutor_id": tutor_id}), 404
         except Exception as e:
@@ -451,6 +415,8 @@ def query_chroma_route():
         if context is not None: 
             return jsonify({"context": context}), 200
         else: 
+            # query_chroma_for_tutor returns "" for no results, None for error
+            # Check if an error was logged in a hypothetical status_dict if it were passed
             return jsonify({"context": "", "message": "No relevant context found or error in query."}), 200
     except Exception as e:
         print(f"Error during ChromaDB query for tutor {data.tutor_id}: {e}")
@@ -467,20 +433,24 @@ def chat_with_tutor_route():
 
     try:
         print(f"Chat: Getting context for tutor {data.tutor_id} with query '{data.user_query[:50]}...'")
-        context = query_chroma_for_tutor(
+        context_from_chroma = query_chroma_for_tutor(
             tutor_id=data.tutor_id,
             query_text=data.user_query,
             n_results=5 
         )
-        if context is None: 
-            context = "" 
-            print(f"Chat: No context found for tutor {data.tutor_id}, query '{data.user_query[:50]}...'")
+        if context_from_chroma is None: # Indicates an error during Chroma query
+            print(f"Chat Error: Failed to retrieve context for tutor {data.tutor_id}.")
+            # Return an error or a message indicating context retrieval failure
+            return jsonify({"error": "Failed to retrieve context for the chat. Please try again."}), 500
+        elif not context_from_chroma: # Empty string means no documents found
+             print(f"Chat: No relevant context found in ChromaDB for tutor {data.tutor_id}, query '{data.user_query[:50]}...'")
         else:
-            print(f"Chat: Retrieved context for tutor {data.tutor_id} (length: {len(context)})")
+            print(f"Chat: Retrieved context for tutor {data.tutor_id} (length: {len(context_from_chroma)})")
+
 
         azure_api_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT")
         azure_api_key = os.getenv("AZURE_OPENAI_API_KEY")
-        azure_deployment_name = os.getenv("DEPLOYMENT_NAME", "gpt-4") 
+        azure_deployment_name = os.getenv("DEPLOYMENT_NAME", "gpt-4") # Default to gpt-4 if not set
 
         if not all([azure_api_endpoint, azure_api_key, azure_deployment_name]):
             missing_vars = [
@@ -499,7 +469,7 @@ def chat_with_tutor_route():
             azure_client = AzureOpenAI(
                 azure_endpoint=azure_api_endpoint,
                 api_key=azure_api_key,
-                api_version=os.getenv("AZURE_OPENAI_API_VERSION", "2024-02-01"),
+                api_version=os.getenv("AZURE_OPENAI_API_VERSION", "2024-02-01"), # Default API version
                 http_client=httpx.Client(verify=cacert_path)
             )
         except Exception as e_client_init:
@@ -508,9 +478,11 @@ def chat_with_tutor_route():
 
         system_prompt_content = "You are an AI assistant for Self Tutor. Your goal is to answer the user's questions based *primarily* on the context provided from the repository's documentation and codebase. If the context is insufficient or irrelevant, state that you cannot answer based on the provided information. Do not make assumptions beyond the context."
         
+        user_prompt_with_context = f"Based on the following context, please answer my question.\n\nContext:\n---\n{context_from_chroma if context_from_chroma else 'No specific context was found for your query.'}\n---\n\nQuestion: {data.user_query}"
+
         messages_for_openai = [
             {"role": "system", "content": system_prompt_content},
-            {"role": "user", "content": f"Based on the following context, please answer my question.\\n\\nContext:\\n---\\n{context}\\n---\\n\\nQuestion: {data.user_query}"}
+            {"role": "user", "content": user_prompt_with_context}
         ]
         
         print(f"Chat: Sending request to Azure OpenAI for tutor {data.tutor_id} with prompt based on query '{data.user_query[:50]}...'")
@@ -525,13 +497,15 @@ def chat_with_tutor_route():
                 frequency_penalty=0,
                 presence_penalty=0,
                 stop=None,
-                stream=False
+                stream=False # Not streaming for this implementation
             )
-            ai_response_content = completion.choices[0].message.content
+            ai_response_content = completion.choices[0].message.content if completion.choices else "No response generated."
             print(f"Chat: Received response from Azure OpenAI for tutor {data.tutor_id}")
             return jsonify(ChatWithTutorOutput(ai_response=ai_response_content).model_dump()), 200
         except Exception as e_openai:
             print(f"Chat Error: Azure OpenAI API call failed: {e_openai}")
+            # Check for specific Azure OpenAI errors if possible (e.g., content filtering)
+            # For now, a generic error.
             return jsonify({"error": f"Azure OpenAI API call failed: {str(e_openai)}"}), 500
 
     except Exception as e:
@@ -541,5 +515,3 @@ def chat_with_tutor_route():
 
 if __name__ == '__main__':
     app.run(host='127.0.0.1', port=5001, debug=True)
-
-    
