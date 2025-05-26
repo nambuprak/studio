@@ -21,9 +21,6 @@ def _read_gitignore(directory_path: str) -> pathspec.PathSpec:
         except Exception as e:
             print(f"Warning: Could not read .gitignore at {gitignore_path}: {e}")
     
-    # Ensure .git directory itself is always part of the spec to be ignored if present.
-    # This is important because pathspec matches against relative paths from the .gitignore location.
-    # Adding it here makes it behave more like git itself, which won't traverse .git.
     if ".git/" not in patterns and ".git" not in patterns:
         patterns.append(".git/")
     return pathspec.PathSpec.from_lines('gitwildmatch', patterns)
@@ -34,16 +31,20 @@ def _update_status(status_dict: Optional[Dict[str, Any]], message: Optional[str]
         
         if error:
             status_dict["error"] = error
-            status_dict["message"] = f"Error: {error}" # Error message takes precedence
-            status_dict["status"] = "FAILED" # Always set status to FAILED if an error is reported
+            status_dict["message"] = f"Error: {error}"
+            status_dict["status"] = "FAILED"
             print(f"Error Update (TutorID: {tutor_id_log}): {error}")
-            return # Stop further processing for this update call
+            return
 
         if message:
             status_dict["message"] = message
-            print(f"Status Update (TutorID: {tutor_id_log}): {message}")
-        
-        if status: # Allows setting specific status like "PROCESSING_FILES" or "COMPLETED"
+            # Avoid printing every single "Discovered file..." message if it's too noisy
+            if not message.startswith("Discovered file (") or status_dict.get("last_printed_discovery_count", 0) % 10 == 0:
+                 print(f"Status Update (TutorID: {tutor_id_log}): {message}")
+                 if message.startswith("Discovered file ("):
+                     status_dict["last_printed_discovery_count"] = status_dict.get("discovered_files_count", 0)
+
+        if status:
             status_dict["status"] = status
 
         if processed_files_count is not None:
@@ -60,11 +61,6 @@ def _process_files_in_directory(
     status_dict: Optional[Dict[str, Any]],
     is_local_folder_walk: bool = False 
 ) -> List[str]: 
-    """
-    Walks through a directory, collects absolute paths of files matching criteria.
-    If is_local_folder_walk is True, it will also try to respect .gitignore rules.
-    Updates status_dict with progress. Returns list of absolute file paths.
-    """
     discovered_file_paths: List[str] = []
 
     file_types_to_include = [ft.strip() for ft in file_types_str.split(',') if ft.strip()]
@@ -72,7 +68,7 @@ def _process_files_in_directory(
 
     folders_to_exclude_set = {fd.strip() for fd in exclude_folders_str.split(',') if fd.strip()}
 
-    _update_status(status_dict, message=f"Starting file scan in: {directory_path}. Including: {file_types_to_include or 'all'}. Excluding folders: {folders_to_exclude_set or 'none'}.")
+    _update_status(status_dict, message=f"Scanning files in: {directory_path}. Including: {file_types_to_include or 'all'}. Excluding folders: {folders_to_exclude_set or 'none'}.")
 
     gitignore_spec: Optional[pathspec.PathSpec] = None
     if is_local_folder_walk: 
@@ -82,7 +78,6 @@ def _process_files_in_directory(
 
     current_file_count = 0
     for root, dirs, files in os.walk(directory_path, topdown=True):
-        # For .gitignore compatibility, we need paths relative to the directory_path (where .gitignore is)
         original_dirs_copy = list(dirs) 
         dirs[:] = [] 
 
@@ -90,23 +85,21 @@ def _process_files_in_directory(
             dir_path_full = os.path.join(root, d_name)
             dir_path_relative_to_walk_root = os.path.relpath(dir_path_full, directory_path)
 
-            if d_name in folders_to_exclude_set:
-                _update_status(status_dict, message=f"Excluding folder by user rule: {dir_path_full}")
+            if d_name.strip() in folders_to_exclude_set:
+                # _update_status(status_dict, message=f"Excluding folder by user rule: {dir_path_full}")
                 continue
             
-            # Always exclude .git if processing a local folder, even if not in .gitignore or exclude_folders_str
-            # For cloned repos, .git is usually not an issue as we care about checked-out files.
             if is_local_folder_walk and d_name == ".git":
-                _update_status(status_dict, message=f"Skipping .git directory: {dir_path_full}")
+                # _update_status(status_dict, message=f"Skipping .git directory: {dir_path_full}")
                 continue
 
             if d_name.startswith('.'): 
-                 if d_name not in [".git"]: # .git has specific handling above or by gitignore_spec
-                    _update_status(status_dict, message=f"Skipping hidden directory: {dir_path_full}")
+                 if d_name not in [".git"]:
+                    # _update_status(status_dict, message=f"Skipping hidden directory: {dir_path_full}")
                     continue
             
             if gitignore_spec and gitignore_spec.match_file(dir_path_relative_to_walk_root + '/'):
-                _update_status(status_dict, message=f"Excluding folder by .gitignore: {dir_path_full}")
+                # _update_status(status_dict, message=f"Excluding folder by .gitignore: {dir_path_full}")
                 continue
             
             dirs.append(d_name)
@@ -116,23 +109,25 @@ def _process_files_in_directory(
             file_path_relative_to_walk_root = os.path.relpath(file_path_full, directory_path)
 
             if gitignore_spec and gitignore_spec.match_file(file_path_relative_to_walk_root):
-                _update_status(status_dict, message=f"Excluding file by .gitignore: {file_path_full}")
+                # _update_status(status_dict, message=f"Excluding file by .gitignore: {file_path_full}")
                 continue
 
             if file_name.startswith('.') and not any(file_name.endswith(ft) for ft in file_types_to_include):
-                 _update_status(status_dict, message=f"Skipping hidden file: {file_path_full}")
+                 # _update_status(status_dict, message=f"Skipping hidden file: {file_path_full}")
                  continue
 
             if not file_types_to_include: 
                 discovered_file_paths.append(file_path_full)
                 current_file_count += 1
-                _update_status(status_dict, message=f"Discovered file ({current_file_count}): {os.path.basename(file_path_full)}")
             else:
                 _, ext = os.path.splitext(file_name)
                 if ext.lower().strip() in file_types_to_include:
                     discovered_file_paths.append(file_path_full)
                     current_file_count += 1
-                    _update_status(status_dict, message=f"Discovered file ({current_file_count}): {os.path.basename(file_path_full)}")
+            
+            if current_file_count % 10 == 0 and current_file_count > 0 : # Log every 10 files
+                _update_status(status_dict, message=f"Discovered {current_file_count} files so far...")
+
 
     _update_status(status_dict, message=f"Discovered {len(discovered_file_paths)} files in '{directory_path}' after filtering.", processed_files_count=len(discovered_file_paths))
     return discovered_file_paths
@@ -148,23 +143,18 @@ def process_repository_content(
     additional_info_list: List[Dict[str, str]], 
     status_dict: Optional[Dict[str, Any]]
 ) -> Tuple[int, str]: 
-    """
-    Processes repository content either from a local folder or by cloning a Git URL.
-    If embed_repo_flag is True, also triggers embedding.
-    Updates status_dict with progress.
-    """
     discovered_files_count = 0
     final_processing_message = ""
     discovered_file_paths: List[str] = []
+    project_root_for_embedding = source_location # Default for local folder
 
-    if status_dict is None: # Should not happen if called from app.py's background thread
+    if status_dict is None:
         status_dict = {} 
 
     if input_type == 'folder':
         if not os.path.isdir(source_location):
-            err_msg = f"Error: Folder path does not exist: {source_location}"
-            _update_status(status_dict, error=err_msg) # This sets status to FAILED
-            # No need to raise here, the error in status_dict will halt further processing in app.py
+            err_msg = f"Error: Folder path does not exist or is not accessible: {source_location}"
+            _update_status(status_dict, error=err_msg, status="FAILED")
             return 0, err_msg 
 
         _update_status(status_dict, message=f"Processing local folder: {source_location}", status="PROCESSING_FILES")
@@ -176,6 +166,7 @@ def process_repository_content(
 
     elif input_type == 'url':
         temp_clone_dir = f"temp_repo_clone_{tutor_id.replace('-', '_')}"
+        project_root_for_embedding = temp_clone_dir # For cloned repo, root is the clone dir
 
         if os.path.exists(temp_clone_dir):
             _update_status(status_dict, message=f"Cleaning up pre-existing temporary directory: {temp_clone_dir}")
@@ -188,36 +179,37 @@ def process_repository_content(
             os.makedirs(temp_clone_dir, exist_ok=True)
             _update_status(status_dict, message=f"Cloning repository: {source_location} into {temp_clone_dir}...", status="CLONING_REPO")
             repo = git.Repo.clone_from(source_location, temp_clone_dir, depth=1) 
-            _update_status(status_dict, message="Repository cloned successfully. Checking out HEAD...")
+            _update_status(status_dict, message="Repository cloned. Checking out HEAD...")
 
             try:
                 repo.git.checkout('HEAD') 
                 _update_status(status_dict, message=f"Checked out HEAD. Processing cloned files in {temp_clone_dir}...", status="PROCESSING_FILES")
             except git.exc.GitCommandError as e_checkout:
-                _update_status(status_dict, message=f"Warning: Could not explicitly checkout HEAD: {e_checkout}. Proceeding with current state.", error=str(e_checkout))
+                 # Log as a warning but proceed, clone_from usually checks out default branch.
+                _update_status(status_dict, message=f"Warning during git checkout HEAD: {e_checkout}. Proceeding with current state.")
             except Exception as e_general_checkout: 
-                _update_status(status_dict, message=f"Warning: An unexpected error during checkout: {e_general_checkout}. Proceeding...", error=str(e_general_checkout))
+                _update_status(status_dict, message=f"Warning: An unexpected error during checkout: {e_general_checkout}. Proceeding...")
             
-            if status_dict.get("error"): # If checkout failed critically
-                return 0, status_dict.get("message", "Checkout failed")
+            # Continue even if checkout had a minor issue, as clone_from should leave a working tree.
+            # Error would be set if clone_from itself failed.
 
-            discovered_file_paths = _process_files_in_directory(temp_clone_dir, file_types_str, exclude_folders_str, tutor_id, status_dict, is_local_folder_walk=False)
+            discovered_file_paths = _process_files_in_directory(temp_clone_dir, file_types_str, exclude_folders_str, tutor_id, status_dict, is_local_folder_walk=False) # .gitignore handled by clone
             discovered_files_count = len(discovered_file_paths)
             final_processing_message = "Repository cloned and file discovery complete."
             _update_status(status_dict, message=final_processing_message, processed_files_count=discovered_files_count)
 
-
         except git.exc.GitCommandError as e_clone:
             error_details = e_clone.stderr if hasattr(e_clone, 'stderr') and e_clone.stderr else str(e_clone)
-            _update_status(status_dict, error=f"Git clone failed: {error_details}")
-            return 0, f"Git clone failed: {error_details}"
+            _update_status(status_dict, error=f"Git clone failed: {error_details}", status="FAILED")
+            return 0, status_dict.get("message", "Git clone failed.") # Get the message set by _update_status
         except Exception as e_process: 
-            _update_status(status_dict, error=f"Error processing cloned repository: {str(e_process)}")
-            return 0, f"An unexpected error occurred during repository processing setup: {str(e_process)}"
+            _update_status(status_dict, error=f"Error processing cloned repository: {str(e_process)}", status="FAILED")
+            return 0, status_dict.get("message", "Error processing repository.")
         finally:
             if os.path.exists(temp_clone_dir):
                 _update_status(status_dict, message=f"Cleaning up temporary directory: {temp_clone_dir}...")
                 try:
+                    # Attempt to fix PermissionError on Windows for .git folder
                     if os.name == 'nt':
                         git_dir_path = os.path.join(temp_clone_dir, '.git')
                         if os.path.exists(git_dir_path):
@@ -225,52 +217,54 @@ def process_repository_content(
                                 for name_git in dirs_git + files_git:
                                     try:
                                         os.chmod(os.path.join(root_git, name_git), 0o777) 
-                                    except Exception:
-                                        pass 
+                                    except Exception: # nosec
+                                        pass # Ignore errors changing permissions
                     shutil.rmtree(temp_clone_dir)
                     _update_status(status_dict, message=f"Successfully removed {temp_clone_dir}")
                 except PermissionError as e_perm: 
-                    _update_status(status_dict, message=f"PermissionError removing {temp_clone_dir}: {e_perm}. Manual cleanup might be needed.", error=str(e_perm))
+                    _update_status(status_dict, message=f"Warning: PermissionError removing {temp_clone_dir}: {e_perm}. Manual cleanup might be needed.") # Not a critical error for status
                 except Exception as e_rm:
-                    _update_status(status_dict, message=f"Error removing {temp_clone_dir}: {e_rm}", error=str(e_rm))
+                    _update_status(status_dict, message=f"Warning: Error removing {temp_clone_dir}: {e_rm}. Manual cleanup might be needed.")
     else:
         err_msg_input_type = f"Invalid input_type for processing: {input_type}"
-        _update_status(status_dict, error=err_msg_input_type)
+        _update_status(status_dict, error=err_msg_input_type, status="FAILED")
         return 0, err_msg_input_type
 
-    if status_dict.get("error"): # If file discovery failed
-        return discovered_files_count, status_dict.get("message", "File discovery failed.")
+    if status_dict.get("error") and status_dict.get("status") == "FAILED":
+        return discovered_files_count, status_dict.get("message", "File discovery or cloning failed.")
 
     if embed_repo_flag: 
         _update_status(status_dict, message=f"Starting embedding process for {discovered_files_count} files, repo overview, and additional info...", status="PROCESSING_EMBEDDING")
         try:
             embed_documents_for_tutor(
                 tutor_id=tutor_id,
+                project_root_path=project_root_for_embedding, # Pass the determined project root
                 file_paths=discovered_file_paths,
                 repo_overview=repo_overview,
                 additional_info_list=additional_info_list,
                 status_dict=status_dict 
             )
-            # embed_documents_for_tutor will set its own final message and status ("COMPLETED_EMBEDDING_STEP" or "FAILED")
+            # embed_documents_for_tutor will set its own final message and status ("COMPLETED_EMBEDDING" or "FAILED")
+            # The status in status_dict will be updated by embed_documents_for_tutor
             final_processing_message = status_dict.get("message", "Embedding process finished.") 
-        except Exception as e_embed:
+        except Exception as e_embed: # Should ideally be caught within embed_documents_for_tutor
             err_msg_embed = f"Critical error during embedding process initiation: {e_embed}"
-            _update_status(status_dict, error=err_msg_embed)
+            _update_status(status_dict, error=err_msg_embed, status="FAILED")
             final_processing_message = err_msg_embed
     
-    if status_dict.get("error"): # Check if embedding itself failed
+    if status_dict.get("error") and status_dict.get("status") == "FAILED":
          return discovered_files_count, status_dict.get("message", "Embedding failed.")
 
-    # If embed_repo_flag was false, or if embedding step completed without setting its own error.
-    # This final message is for the overall "process_repository_content" step.
-    # The actual "COMPLETED" status for the whole job is set in app.py's _perform_long_repository_processing
-    if not status_dict.get("error"):
+    if not status_dict.get("error"): # If no errors so far
         if embed_repo_flag:
-            # Message already set by embed_documents_for_tutor or error handling above
-            pass
-        else: # Embedding was skipped
+            # Message should be set by embed_documents_for_tutor as "Processing completed. Repository embedded."
+            # and status to "COMPLETED_EMBEDDING" (or similar "COMPLETED" state)
+             _update_status(status_dict, message="Processing completed. Repository embedded.", status="COMPLETED")
+        else: 
             final_processing_message = "File discovery complete. Embedding skipped."
             _update_status(status_dict, message=final_processing_message, status="COMPLETED_NO_EMBEDDING")
+    
+    # Return the final message from status_dict, which should be the most accurate one.
+    return discovered_files_count, status_dict.get("message", "Processing finalized.")
 
-
-    return discovered_files_count, final_processing_message
+    

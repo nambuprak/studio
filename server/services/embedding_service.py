@@ -48,7 +48,7 @@ PERSIST_DIR_BASE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(
 
 
 # Embedding API call settings (can be reused for Azure)
-MAX_RETRIES_EMBEDDING = 3 # Increased from 1
+MAX_RETRIES_EMBEDDING = 3 
 RETRY_BACKOFF_FACTOR_EMBEDDING = 2 # Seconds
 
 # Ensure the ChromaDB persistence directory exists
@@ -62,24 +62,21 @@ def _update_status_safely(status_dict: Optional[Dict[str, Any]], message: Option
 
     if error:
         status_dict["error"] = error
-        status_dict["message"] = f"Error: {error}" # Main message becomes the error
-        status_dict["status"] = "FAILED" # CRITICAL: Always set status to FAILED if error is present
-        if progress_detail: # e.g. "Error during embedding chunk X from Y"
+        status_dict["message"] = f"Error: {error}" 
+        status_dict["status"] = "FAILED" 
+        if progress_detail: 
             status_dict["progress_detail"] = progress_detail
         print(f"Status Update (Error): {status_dict['message']} - Detail: {progress_detail if progress_detail else 'N/A'}")
-        return # Error takes precedence, further message/status updates for this call are ignored.
+        return 
 
-    # If no error, proceed with normal updates
-    if message: # Can be a progress message or final success message
+    if message:
         status_dict["message"] = message
     
-    if status: # Can be a specific processing step, or "COMPLETED"
+    if status:
         status_dict["status"] = status
     
     if progress_detail: 
         status_dict["progress_detail"] = progress_detail
-        # Only update main message with progress_detail if it's not a final status already
-        # and the current message seems like a generic "processing..." type message.
         current_msg_lower = status_dict.get("message", "").lower()
         is_final_status_msg = "completed" in current_msg_lower or \
                               "failed" in current_msg_lower or \
@@ -90,10 +87,10 @@ def _update_status_safely(status_dict: Optional[Dict[str, Any]], message: Option
                any(kw in current_msg_lower for kw in ["processing", "embedding","starting","cloning", "initializing", "discovered", "split", "embedding chunk"]):
                  status_dict["message"] = progress_detail
     
-    # Log non-error updates if a message or status was set
     if message or status or progress_detail:
         log_msg = f"Status: {status_dict.get('status', 'N/A')} - Msg: {status_dict.get('message', 'N/A')} - Detail: {status_dict.get('progress_detail', 'N/A')}"
-        print(f"Status Update: {log_msg}")
+        if not log_msg.startswith("Status Update (Error)"): # Avoid double printing errors
+            print(f"Status Update: {log_msg}")
 
 
 def get_embedding_for_text_custom_api(text: str, status_dict: Optional[dict] = None) -> Optional[List[float]]:
@@ -122,18 +119,18 @@ def get_embedding_for_text_custom_api(text: str, status_dict: Optional[dict] = N
             else:
                 err_msg = f"Invalid custom embedding API response format for text: '{text[:50]}...'"
                 if retry_count + 1 >= MAX_RETRIES_EMBEDDING: 
-                     _update_status_safely(status_dict, error=err_msg)
+                     _update_status_safely(status_dict, error=err_msg, status="FAILED")
                 else: 
-                    _update_status_safely(status_dict, progress_detail=err_msg) # Log as progress for retries
+                    _update_status_safely(status_dict, progress_detail=err_msg) 
         except requests.exceptions.RequestException as e:
             error_msg = f"Custom Embedding API request failed: {e}. Attempt {retry_count + 1}/{MAX_RETRIES_EMBEDDING}."
             if retry_count + 1 >= MAX_RETRIES_EMBEDDING: 
-                _update_status_safely(status_dict, error=error_msg)
+                _update_status_safely(status_dict, error=error_msg, status="FAILED")
             else:
                 _update_status_safely(status_dict, progress_detail=error_msg)
         except ValueError as ve: 
              error_msg_ve = f"Error parsing custom embedding API response: {ve} for text: '{text[:50]}...'"
-             _update_status_safely(status_dict, error=error_msg_ve)
+             _update_status_safely(status_dict, error=error_msg_ve, status="FAILED")
              return None 
 
         retry_count += 1
@@ -142,7 +139,7 @@ def get_embedding_for_text_custom_api(text: str, status_dict: Optional[dict] = N
         else: 
             final_error_msg = f"Failed custom embedding API after {MAX_RETRIES_EMBEDDING} attempts for text: '{text[:50]}...'"
             if status_dict and not status_dict.get("error"): 
-                _update_status_safely(status_dict, error=final_error_msg)
+                _update_status_safely(status_dict, error=final_error_msg, status="FAILED")
             return None
     return None 
 
@@ -164,7 +161,7 @@ def get_embedding_for_text(text: str, status_dict: Optional[dict] = None) -> Opt
 
     if missing_vars:
         err_msg_env = f"Azure OpenAI embedding configuration error: Missing environment variable(s): {', '.join(missing_vars)}."
-        _update_status_safely(status_dict, error=err_msg_env, message="Azure Configuration Error")
+        _update_status_safely(status_dict, error=err_msg_env, message="Azure Configuration Error", status="FAILED")
         return None
 
     try:
@@ -177,15 +174,14 @@ def get_embedding_for_text(text: str, status_dict: Optional[dict] = None) -> Opt
         )
     except Exception as e_client_init:
         err_msg_client = f"Failed to initialize AzureOpenAI client for embeddings: {e_client_init}"
-        _update_status_safely(status_dict, error=err_msg_client, message="Azure Client Init Error")
+        _update_status_safely(status_dict, error=err_msg_client, message="Azure Client Init Error", status="FAILED")
         return None
 
     retry_count = 0
     processed_text = text.replace("\n", " ").replace("\r", " ").strip() 
     if not processed_text: 
         _update_status_safely(status_dict, progress_detail=f"Skipped embedding for empty text.")
-        return None
-
+        return None # Not an error, just skip
 
     while retry_count < MAX_RETRIES_EMBEDDING:
         try:
@@ -198,14 +194,14 @@ def get_embedding_for_text(text: str, status_dict: Optional[dict] = None) -> Opt
             else: 
                 err_msg_format = f"Invalid Azure OpenAI embedding response format for text: '{processed_text[:50]}...'"
                 if retry_count + 1 >= MAX_RETRIES_EMBEDDING:
-                     _update_status_safely(status_dict, error=err_msg_format)
+                     _update_status_safely(status_dict, error=err_msg_format, status="FAILED")
                 else:
                      _update_status_safely(status_dict, progress_detail=err_msg_format)
         except Exception as e: 
             error_detail = str(e)
             error_msg_api_call = f"Azure OpenAI Embedding API call failed: {error_detail}. Attempt {retry_count + 1}/{MAX_RETRIES_EMBEDDING} for text: '{processed_text[:50]}...'."
             if retry_count + 1 >= MAX_RETRIES_EMBEDDING:
-                _update_status_safely(status_dict, error=error_msg_api_call)
+                _update_status_safely(status_dict, error=error_msg_api_call, status="FAILED")
             else:
                 _update_status_safely(status_dict, progress_detail=error_msg_api_call)
         
@@ -214,11 +210,11 @@ def get_embedding_for_text(text: str, status_dict: Optional[dict] = None) -> Opt
             time.sleep(RETRY_BACKOFF_FACTOR_EMBEDDING ** retry_count)
         else: 
             final_error_msg = f"Failed Azure OpenAI embedding after {MAX_RETRIES_EMBEDDING} attempts for text: '{processed_text[:50]}...'"
-            if status_dict and not status_dict.get("error"): # Only set error if not already set by a more specific previous error
-                 _update_status_safely(status_dict, error=final_error_msg)
-            return None # Explicitly return None if all retries fail
+            if status_dict and not status_dict.get("error"): 
+                 _update_status_safely(status_dict, error=final_error_msg, status="FAILED")
+            return None 
             
-    return None # Should be unreachable if MAX_RETRIES_EMBEDDING > 0
+    return None 
 
 
 def initialize_chroma_collection(tutor_id: str, status_dict: Optional[dict] = None) -> Optional[ChromaCollection]:
@@ -234,7 +230,7 @@ def initialize_chroma_collection(tutor_id: str, status_dict: Optional[dict] = No
         return collection
     except Exception as e:
         error_msg_chroma = f"Error initializing ChromaDB for tutor {tutor_id}: {e}"
-        _update_status_safely(status_dict, error=error_msg_chroma, message="ChromaDB initialization failed.")
+        _update_status_safely(status_dict, error=error_msg_chroma, message="ChromaDB initialization failed.", status="FAILED")
         return None
 
 def delete_chroma_collection_for_tutor(tutor_id: str):
@@ -251,9 +247,9 @@ def delete_chroma_collection_for_tutor(tutor_id: str):
         collection_existed_before_api_delete = False
 
         try:
+            # Try to get the collection to find its UUID (directory name)
             target_collection_obj = chroma_client.get_collection(name=collection_name)
             collection_uuid_str = str(target_collection_obj.id) 
-            # Construct the path to the physical directory using the UUID
             physical_collection_path = os.path.join(PERSIST_DIR_BASE, collection_uuid_str)
             print(f"Found collection '{collection_name}' with UUID: {collection_uuid_str}. Expected physical path: {physical_collection_path}")
             
@@ -264,17 +260,19 @@ def delete_chroma_collection_for_tutor(tutor_id: str):
                 print(f"Physical directory '{physical_collection_path}' does NOT exist before API deletion attempt.")
         
         except Exception as e_get_coll:
-            print(f"Info: Could not get collection '{collection_name}' from ChromaDB (it might not exist, or an error occurred trying to get its UUID): {e_get_coll}")
-            # Try deleting by name if getting the object failed
+            # This means the collection might not exist in Chroma's metadata, or there's an issue accessing it.
+            # We might not be able to get the UUID, so direct physical folder deletion by UUID is not possible.
+            print(f"Info: Could not get collection '{collection_name}' (it might not exist, or UUID lookup failed): {e_get_coll}")
+            # Fallback: attempt deletion by name if UUID not found, and then we're done with this path.
+            # The physical folder might be orphaned if not named predictably after collection_name.
             try:
                 chroma_client.delete_collection(name=collection_name)
-                print(f"API call to delete_collection('{collection_name}') by name attempted as UUID was not retrieved.")
-                # If this succeeds, the physical folder (if named after UUID) might still be there or removed by API.
-                # We don't have physical_collection_path in this case, so direct physical deletion is harder.
+                print(f"API call to delete_collection('{collection_name}') by name was attempted as UUID was not retrieved.")
             except Exception as e_del_by_name_fallback:
                 print(f"API call to delete_collection('{collection_name}') by name also failed: {e_del_by_name_fallback}")
-            return # Exit if we couldn't get the collection object initially.
+            return # Exit here if we couldn't get the collection object initially.
 
+        # If we successfully got the collection object and its UUID:
         api_delete_call_made = False
         try:
             chroma_client.delete_collection(name=collection_name) # API call
@@ -283,25 +281,25 @@ def delete_chroma_collection_for_tutor(tutor_id: str):
         except Exception as e_api_delete:
             print(f"Error during API call to delete_collection('{collection_name}'): {e_api_delete}. Will still attempt physical cleanup if path is known.")
 
-        # Attempt physical deletion of the UUID-named folder
         if physical_collection_path:
             if os.path.exists(physical_collection_path) and os.path.isdir(physical_collection_path):
-                print(f"Physical directory '{physical_collection_path}' (UUID-based) still exists. Attempting shutil.rmtree...")
+                print(f"Physical directory '{physical_collection_path}' (UUID-based) still exists after API call. Attempting shutil.rmtree...")
                 try:
                     shutil.rmtree(physical_collection_path)
                     print(f"Successfully deleted physical directory: {physical_collection_path}")
                 except Exception as e_rmtree_uuid:
                     print(f"Error deleting physical directory '{physical_collection_path}' with shutil.rmtree: {e_rmtree_uuid}. Manual cleanup might be needed.")
             else:
+                # If it existed before API delete and API delete was called, it was likely removed by API.
                 if collection_existed_before_api_delete and api_delete_call_made:
                     print(f"Physical directory '{physical_collection_path}' no longer exists. Likely removed by the API delete_collection call.")
                 elif collection_existed_before_api_delete and not api_delete_call_made:
-                     print(f"Physical directory '{physical_collection_path}' no longer exists, but API delete call failed or was not made successfully (problematic state).")
+                     print(f"Physical directory '{physical_collection_path}' no longer exists, but API delete call failed or was not made successfully. (Problematic state, might be an orphan if not cleaned by other means)")
                 else: # Did not exist before, and still does not exist.
                     print(f"Physical directory '{physical_collection_path}' was not found initially and is still not found.")
         else:
-            # This case should ideally not be reached if get_collection succeeded.
-            print(f"Physical collection path for '{collection_name}' was not determined (UUID lookup failed). Skipping UUID-based physical deletion.")
+            # Should not be reached if get_collection succeeded and physical_collection_path was set.
+            print(f"Physical collection path for '{collection_name}' was not determined. Skipping UUID-based physical deletion. API delete by name was attempted if retrieval failed.")
 
     except Exception as e:
         print(f"General error during ChromaDB collection deletion process for '{collection_name}' (tutor_id {tutor_id}): {e}. Manual cleanup might be needed.")
@@ -319,18 +317,17 @@ def add_chunk_to_chromadb(collection: ChromaCollection, text_chunk: str, embeddi
         )
     except Exception as e:
         error_msg_add_chunk = f"Error adding chunk (Source: {metadata.get('source')}, File: {metadata.get('file_name')}) to ChromaDB: {e}"
-        _update_status_safely(status_dict, error=error_msg_add_chunk)
+        _update_status_safely(status_dict, error=error_msg_add_chunk, status="FAILED")
 
 
 def _process_text_document_for_embedding(
     doc_text: str,
-    source_name: str, # e.g. "file:///path/to/file.py", "repository_overview", "additional_info_0_auth"
+    source_name: str, 
     collection: ChromaCollection,
     text_splitter: CharacterTextSplitter,
     status_dict: dict,
-    doc_type_override: Optional[str] = None # For repo_overview, additional_info
+    doc_type_override: Optional[str] = None 
 ):
-    """Splits a text document, gets embeddings for chunks, and adds them to ChromaDB."""
     _update_status_safely(status_dict, progress_detail=f"Processing document: {source_name} for embedding...")
     if not doc_text.strip():
         _update_status_safely(status_dict, progress_detail=f"Skipping empty document: {source_name}.")
@@ -339,7 +336,7 @@ def _process_text_document_for_embedding(
     try:
         raw_chunks = text_splitter.split_text(doc_text)
     except Exception as e:
-        _update_status_safely(status_dict, error=f"Error splitting document {source_name}: {e}", progress_detail=f"Failed to split {source_name}")
+        _update_status_safely(status_dict, error=f"Error splitting document {source_name}: {e}", progress_detail=f"Failed to split {source_name}", status="FAILED")
         return
 
     num_chunks = len(raw_chunks)
@@ -359,32 +356,31 @@ def _process_text_document_for_embedding(
             metadata: Dict[str, Any] = {"source": source_name, "chunk_index": i}
             if doc_type_override:
                 metadata["doc_type"] = doc_type_override
-                metadata["file_name"] = source_name # For overview/additional, filename is the source itself
-            elif source_name.startswith("file://"):
+                metadata["file_name"] = source_name 
+            else: # Actual file content
                  metadata["doc_type"] = "file_content"
-                 actual_file_path = source_name.replace("file://", "")
-                 metadata["file_name"] = os.path.basename(actual_file_path)
-            else: # Should not happen if doc_type_override is used correctly
-                 metadata["doc_type"] = "generic_text"
-                 metadata["file_name"] = source_name
-
-
+                 metadata["file_name"] = os.path.basename(source_name) # source_name is relative_file_path for files
+            
             add_chunk_to_chromadb(collection, chunk_text, embedding, metadata, status_dict)
+        # If embedding failed, get_embedding_for_text would have updated status_dict with an error and FAILED status.
+        # We should check for that error here.
         elif not status_dict.get("error"): 
-            _update_status_safely(status_dict, message=f"Failed to get embedding for chunk {i+1}/{num_chunks} from '{source_name}'. Skipping chunk.")
+            # This case should be less common now if get_embedding_for_text properly sets error.
+            _update_status_safely(status_dict, message=f"Failed to get embedding for chunk {i+1}/{num_chunks} from '{source_name}'. Skipping chunk.", status="FAILED") 
         
         if status_dict.get("error"): 
             print(f"Stopping embedding for document '{source_name}' due to error: {status_dict.get('error')}")
-            return
+            return # Propagate error state by returning
 
 
 def _process_single_file_for_embedding(
-    file_path: str,
+    file_path: str, # Absolute file path
+    project_root_path: str, # Absolute project root path
     collection: ChromaCollection,
     text_splitter: CharacterTextSplitter,
     status_dict: dict
 ):
-    """Reads a single file, then processes its content for embedding."""
+    """Reads a single file, then processes its content for embedding using relative path as source_name."""
     base_file_name = os.path.basename(file_path)
     _update_status_safely(status_dict, progress_detail=f"Embedding file: {base_file_name}...")
     try:
@@ -393,34 +389,30 @@ def _process_single_file_for_embedding(
         if not content.strip():
             _update_status_safely(status_dict, progress_detail=f"Skipping empty file: {file_path}.")
             return
-        # Pass file path with "file://" prefix as source_name
-        _process_text_document_for_embedding(content, f"file://{file_path}", collection, text_splitter, status_dict)
+
+        relative_file_path = os.path.relpath(file_path, project_root_path)
+        # Use relative path as the source_name for embedding
+        _process_text_document_for_embedding(content, relative_file_path, collection, text_splitter, status_dict)
     except Exception as e:
-        _update_status_safely(status_dict, error=f"Error reading or processing file {file_path}: {e}", progress_detail=f"Failed for file: {base_file_name}")
+        _update_status_safely(status_dict, error=f"Error reading or processing file {file_path}: {e}", progress_detail=f"Failed for file: {base_file_name}", status="FAILED")
 
 
 def embed_documents_for_tutor(
     tutor_id: str,
-    file_paths: List[str],
+    project_root_path: str, # Added: absolute path to project root for calculating relative paths
+    file_paths: List[str], # These are absolute paths
     repo_overview: str,
     additional_info_list: List[Dict[str, str]],
     status_dict: dict
 ):
-    """
-    Main function to handle embedding for a tutor.
-    Embeds discovered files, repository overview, and additional info.
-    """
     _update_status_safely(status_dict, message="Initializing embedding process...")
 
     collection = initialize_chroma_collection(tutor_id, status_dict)
-    if not collection:
-        if not status_dict.get("error"): # Error already set by initialize_chroma_collection
-            _update_status_safely(status_dict, error="Fatal: Could not initialize ChromaDB. Aborting embedding.")
+    if not collection: # initialize_chroma_collection would have set status to FAILED
         return
 
     text_splitter = CharacterTextSplitter(chunk_size=1700, chunk_overlap=200, separator="\n")
 
-    # Process repo_overview first
     if repo_overview and repo_overview.strip():
         _process_text_document_for_embedding(
             repo_overview, 
@@ -431,12 +423,11 @@ def embed_documents_for_tutor(
             doc_type_override="repo_overview"
         )
         if status_dict.get("error"): 
-            print(f"Stopping embedding for tutor {tutor_id} due to error during repo overview embedding: {status_dict.get('error')}")
+            print(f"Stopping embedding for tutor {tutor_id} due to error: {status_dict.get('error')}")
             return 
     else:
         _update_status_safely(status_dict, progress_detail="No repository overview provided, skipping its embedding.")
 
-    # Process additional_info_list
     if additional_info_list:
         for i, info_item in enumerate(additional_info_list):
             title = info_item.get('title', '')
@@ -453,30 +444,27 @@ def embed_documents_for_tutor(
                     doc_type_override="additional_info"
                 )
                 if status_dict.get("error"):
-                    print(f"Stopping embedding for tutor {tutor_id} due to error during additional info item '{title}' embedding: {status_dict.get('error')}")
+                    print(f"Stopping embedding for tutor {tutor_id} due to error: {status_dict.get('error')}")
                     return
             else:
                  _update_status_safely(status_dict, progress_detail=f"Skipping empty additional info item at index {i}.")
     else:
         _update_status_safely(status_dict, progress_detail="No additional info items provided, skipping their embedding.")
 
-    # Process files
     if file_paths:
         _update_status_safely(status_dict, message=f"Preparing to embed content from {len(file_paths)} discovered files...")
-        # Using a ThreadPoolExecutor for concurrent file processing (reading and chunking) 
-        # and embedding API calls.
-        # Adjust max_workers based on your API rate limits and server capabilities.
         max_workers = min(5, os.cpu_count() * 2 if os.cpu_count() else 4) 
 
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = []
-            for file_path in file_paths:
+            for file_path in file_paths: # file_path is absolute here
                 if status_dict.get("error"): 
                     print(f"Stopping file embedding submission for tutor {tutor_id} due to pre-existing error: {status_dict.get('error')}")
                     break 
                 futures.append(executor.submit(
                     _process_single_file_for_embedding,
-                    file_path,
+                    file_path, # Pass absolute path
+                    project_root_path, # Pass project root
                     collection,
                     text_splitter,
                     status_dict
@@ -486,31 +474,23 @@ def embed_documents_for_tutor(
             total_files_to_process = len(futures) 
             for i, future in enumerate(futures):
                 try:
-                    future.result() # Wait for thread to complete or raise exception from within the thread
-                    if not status_dict.get("error"): # Only count as processed if no specific error occurred for THIS file or globally
+                    future.result() 
+                    if not status_dict.get("error"):
                         processed_files_count +=1
                     
-                    # Progress detail update based on files *attempted*
                     _update_status_safely(status_dict, progress_detail=f"Attempted processing for file {i+1}/{total_files_to_process}. Successfully processed so far: {processed_files_count}.")
 
-                    if status_dict.get("error"): # Check error from within the thread's execution or a previous one
+                    if status_dict.get("error"): 
                         current_error = status_dict.get('error')
                         print(f"Error encountered during embedding file {os.path.basename(file_paths[i]) if i < len(file_paths) else 'unknown file'}: {current_error}. Halting further file processing for tutor {tutor_id}.")
-                        # Attempt to cancel remaining futures
                         for f_cancel in futures[i+1:]:
                             if not f_cancel.done(): f_cancel.cancel()
-                        # executor.shutdown(wait=False, cancel_futures=True) # Python 3.9+ for cancel_futures
-                        # For older Python or simpler shutdown:
-                        # Let already submitted tasks run to completion or error out,
-                        # but don't submit new ones (already handled by outer loop check)
-                        # The return here will stop processing for this tutor.
                         return 
                 except Exception as e_future: 
-                    # This catches errors from the future.result() if the thread itself had an unhandled exception
                     file_being_processed = os.path.basename(file_paths[i]) if i < len(file_paths) else 'unknown file'
                     print(f"A critical error occurred processing one of the files ({file_being_processed}): {e_future}")
-                    _update_status_safely(status_dict, error=f"Critical error processing file: {file_being_processed} - {str(e_future)}")
-                    return # Stop processing for this tutor
+                    _update_status_safely(status_dict, error=f"Critical error processing file: {file_being_processed} - {str(e_future)}", status="FAILED")
+                    return 
         
         if not status_dict.get("error"): 
             _update_status_safely(status_dict, message=f"Finished embedding content from {processed_files_count}/{total_files_to_process} files successfully.")
@@ -518,67 +498,66 @@ def embed_documents_for_tutor(
         _update_status_safely(status_dict, progress_detail="No files discovered or provided for embedding.")
 
     if not status_dict.get("error"): 
-        _update_status_safely(status_dict, message="Processing completed. Repository embedded.", status="COMPLETED") # Final success status
-    else: 
-        # Error message and status should already be set by _update_status_safely
-        # This just ensures we don't overwrite a FAILED status with something less specific.
-        if status_dict.get("status") != "FAILED":
+        _update_status_safely(status_dict, message="Processing completed. Repository embedded.", status="COMPLETED")
+    else: # Error and FAILED status should already be set
+        if status_dict.get("status") != "FAILED": # Should not happen if errors are handled properly
              _update_status_safely(status_dict, message=f"Document embedding process encountered errors for tutor {tutor_id}. Error: {status_dict.get('error')}", status="FAILED")
 
 
 def query_chroma_for_tutor(tutor_id: str, query_text: str, n_results: int = 5, status_dict: Optional[Dict[str, Any]] = None) -> Optional[str]:
-    """Queries ChromaDB for a given tutor_id and query_text using Azure OpenAI for query embedding."""
     log_prefix = f"QueryChroma (TutorID: {tutor_id}): "
-    # For query, status_dict is usually None as it's a direct call, not part of background processing.
-    # If status_dict is provided, it's for logging within a larger flow.
     current_status_dict_for_query = status_dict if status_dict else {}
 
     _update_status_safely(current_status_dict_for_query, message=f"Querying ChromaDB with: '{query_text[:50]}...'")
     if not status_dict: print(f"{log_prefix}Querying with: '{query_text[:50]}...'")
 
-
     collection = initialize_chroma_collection(tutor_id, current_status_dict_for_query)
     if not collection:
         error_msg = "Failed to initialize ChromaDB collection for querying."
-        _update_status_safely(current_status_dict_for_query, error=error_msg)
+        _update_status_safely(current_status_dict_for_query, error=error_msg, status="FAILED" if status_dict else None)
         if not status_dict: print(f"{log_prefix}{error_msg}")
-        return None # Return None for error
+        return None 
 
     query_embedding = get_embedding_for_text(query_text, current_status_dict_for_query)
     if not query_embedding:
         error_msg_emb = f"Failed to generate embedding for query: '{query_text[:50]}...'"
-        if not current_status_dict_for_query.get("error"): # Don't overwrite specific error from get_embedding_for_text
-            _update_status_safely(current_status_dict_for_query, error=error_msg_emb)
+        if not current_status_dict_for_query.get("error"):
+            _update_status_safely(current_status_dict_for_query, error=error_msg_emb, status="FAILED" if status_dict else None)
         if not status_dict: print(f"{log_prefix}{error_msg_emb}")
-        return None # Return None for error
+        return None 
 
     try:
         results = collection.query(
             query_embeddings=[query_embedding],
             n_results=n_results,
-            include=["documents", "metadatas"] # Include metadatas
+            include=["documents", "metadatas"] 
         )
 
         documents = results.get("documents")
         metadatas_list = results.get("metadatas")
 
         if documents and isinstance(documents, list) and len(documents) > 0:
-            # The result structure for documents and metadatas is List[List[...]]
-            # We need to flatten it if it's nested (it usually is one level deep for single query_embedding)
             flat_documents = [doc for sublist in documents for doc in sublist if doc is not None]
             flat_metadatas = [meta for sublist in metadatas_list for meta in sublist if meta is not None] if metadatas_list else []
-
 
             combined_context_parts = []
             for i, doc_content in enumerate(flat_documents):
                 doc_meta = flat_metadatas[i] if i < len(flat_metadatas) else {}
-                source_info = doc_meta.get("source", "Unknown source")
-                file_name_info = doc_meta.get("file_name", "")
+                source_info = doc_meta.get("source", "Unknown source") # This will be relative path for files
+                file_name_info = doc_meta.get("file_name", "") # This will be basename
                 chunk_idx_info = doc_meta.get("chunk_index", "")
                 
                 context_header = f"Context from: {source_info}"
-                if file_name_info and file_name_info != source_info : # Avoid "Context from: file.txt (file.txt)"
+                # Only add (File: ...) if file_name_info is different from source_info (e.g. for "repository_overview")
+                # For files, source_info is like "src/file.py" and file_name_info is "file.py".
+                # If source_info is "repository_overview" and file_name_info is also "repository_overview", avoid redundancy.
+                if file_name_info and file_name_info != source_info and not source_info.endswith(file_name_info):
                     context_header += f" (File: {file_name_info})"
+                elif file_name_info and source_info.endswith(file_name_info) and source_info != file_name_info:
+                    # Example: source_info = "src/module/file.py", file_name_info = "file.py" -> keep (File: file.py)
+                     context_header += f" (File: {file_name_info})"
+
+
                 if chunk_idx_info != "":
                     context_header += f" [Chunk: {chunk_idx_info}]"
 
@@ -589,12 +568,11 @@ def query_chroma_for_tutor(tutor_id: str, query_text: str, n_results: int = 5, s
             no_results_msg = "No relevant documents found in ChromaDB for the query."
             _update_status_safely(current_status_dict_for_query, message=no_results_msg)
             if not status_dict: print(f"{log_prefix}{no_results_msg}")
-            return "" # Return empty string for no results, not None
+            return "" 
     except Exception as e:
         error_msg_query = f"Error querying ChromaDB: {e}"
-        _update_status_safely(current_status_dict_for_query, error=error_msg_query)
+        _update_status_safely(current_status_dict_for_query, error=error_msg_query, status="FAILED" if status_dict else None)
         if not status_dict: print(f"{log_prefix}{error_msg_query}")
-        return None # Return None for error
-
+        return None 
 
     
