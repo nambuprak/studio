@@ -123,6 +123,7 @@ def _perform_long_repository_processing(tutor_id: str, data: CreateTutorInput, a
                 )
                 current_status["discovered_files_count"] = discovered_files_count
                 # The message in current_status should reflect the outcome of embedding.
+                # It's set by embed_documents_for_tutor or process_repository_content error handling.
                 print(f"Repository processing completed for {tutor_id}. Files: {discovered_files_count}. Msg from service: {final_processing_message_from_service}")
             else:
                 final_processing_message_from_service = "Processing completed. Embedding skipped."
@@ -132,8 +133,8 @@ def _perform_long_repository_processing(tutor_id: str, data: CreateTutorInput, a
             # Update database with the final status and details
             # The message in current_status should be the most accurate one from the service or error handling.
             db_status_message = current_status.get("message", "Processing finalized.")
-            if current_status.get("error"):
-                db_status_message = f"Error: {current_status.get('error')}"
+            if current_status.get("error"): # If there was an error, the message should reflect it
+                db_status_message = current_status.get("message") # message already includes "Error: ..." from _update_status_safely
 
 
             update_tutor_processing_details(
@@ -144,7 +145,10 @@ def _perform_long_repository_processing(tutor_id: str, data: CreateTutorInput, a
             )
             
             # Set final status in TUTOR_PROCESSING_STATUS
-            final_overall_status = "FAILED" if current_status.get("error") else "COMPLETED"
+            # The 'status' field in current_status should already be 'FAILED' or 'COMPLETED' or 'COMPLETED_NO_EMBEDDING'
+            # by the time embed_documents_for_tutor or process_repository_content finishes or errors out.
+            # So, we directly use what's in current_status.
+            final_overall_status = current_status.get("status", "UNKNOWN_COMPLETION") # Default if somehow status wasn't set
             update_embedding_status_safely(current_status, status=final_overall_status, message=db_status_message)
 
 
@@ -156,7 +160,7 @@ def _perform_long_repository_processing(tutor_id: str, data: CreateTutorInput, a
             try:
                 update_tutor_processing_details(
                     tutor_id=tutor_id,
-                    status_message=error_message_for_status, # Ensure this error message is in DB
+                    status_message=error_message_for_status, 
                     discovered_files_count=current_status.get("discovered_files_count", 0),
                     processing_error=str(e)
                 )
@@ -212,10 +216,12 @@ def update_tutor_details_route(tutor_id: str):
         )
 
         if data.embed_repo:
+            # Before starting re-processing, delete existing ChromaDB collection for this tutor
             try:
                 print(f"Update: Deleting existing ChromaDB collection for tutor {tutor_id} before re-embedding.")
                 delete_chroma_collection_for_tutor(tutor_id)
             except Exception as e_delete_chroma:
+                # Log this but proceed. Re-embedding might create a new one or add to remnants.
                 print(f"Update: Warning - Could not delete existing ChromaDB collection for {tutor_id}: {e_delete_chroma}")
 
             TUTOR_PROCESSING_STATUS[tutor_id] = {
@@ -224,6 +230,7 @@ def update_tutor_details_route(tutor_id: str):
                 "project_name": data.project_name,
                 "tutor_id": tutor_id,
                 "error": None
+                # discovered_files_count will be reset by the background task
             }
             thread = threading.Thread(target=_perform_long_repository_processing, args=(tutor_id, data, app.app_context()))
             thread.start()
@@ -233,23 +240,26 @@ def update_tutor_details_route(tutor_id: str):
                 "project_name": data.project_name
             }), 202 
         else:
+            # If embedding is disabled on update, delete any existing ChromaDB collection
             try:
                 print(f"Update: Embedding disabled for tutor {tutor_id}. Deleting ChromaDB collection if it exists.")
                 delete_chroma_collection_for_tutor(tutor_id)
             except Exception as e_delete_chroma:
                  print(f"Update: Warning - Could not delete ChromaDB collection for {tutor_id} after disabling embedding: {e_delete_chroma}")
 
+            # Update DB status to reflect that embedding is skipped
             update_tutor_processing_details(
                 tutor_id=tutor_id,
-                status_message="Processing completed. Embedding skipped.",
-                discovered_files_count=None, 
+                status_message="Processing completed. Embedding skipped.", # Final status
+                discovered_files_count=None, # No files for embedding
                 processing_error=None
             )
+            # Update in-memory status if present
             if tutor_id in TUTOR_PROCESSING_STATUS:
-                TUTOR_PROCESSING_STATUS[tutor_id]["status"] = "COMPLETED"
+                TUTOR_PROCESSING_STATUS[tutor_id]["status"] = "COMPLETED" # or COMPLETED_NO_EMBEDDING
                 TUTOR_PROCESSING_STATUS[tutor_id]["message"] = "Processing completed. Embedding skipped."
                 if "discovered_files_count" in TUTOR_PROCESSING_STATUS[tutor_id]:
-                    TUTOR_PROCESSING_STATUS[tutor_id]["discovered_files_count"] = None # Clear count if embedding disabled
+                    TUTOR_PROCESSING_STATUS[tutor_id]["discovered_files_count"] = None # Clear count
             return jsonify({
                 "message": "Self Tutor configuration updated successfully. Embedding not enabled.",
                 "tutor_id": tutor_id,
@@ -265,24 +275,31 @@ def update_tutor_details_route(tutor_id: str):
 def delete_tutor_route(tutor_id: str):
     conn = None
     try:
+        # Attempt to delete ChromaDB collection first
         print(f"Attempting to delete ChromaDB collection for tutor_id: {tutor_id}")
         delete_chroma_collection_for_tutor(tutor_id) 
+        # This function now has enhanced logging about physical deletion.
         print(f"Successfully requested deletion of ChromaDB collection and its data for tutor_id: {tutor_id} (or it didn't exist).")
 
+        # Then delete from SQLite
         conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute("DELETE FROM tutors WHERE id = ?", (tutor_id,))
         conn.commit()
         if cursor.rowcount == 0:
+            # If not found in DB, it might have been already deleted, or never existed.
+            # ChromaDB deletion attempt was still made.
             return jsonify({"error": "Tutor not found in database or already deleted"}), 404
 
+        # Remove from in-memory status if it exists
         if tutor_id in TUTOR_PROCESSING_STATUS:
             del TUTOR_PROCESSING_STATUS[tutor_id]
 
         return jsonify({"message": "Tutor and associated data deleted successfully"}), 200
     except Exception as e:
-        if conn: conn.rollback()
+        if conn: conn.rollback() # Rollback SQLite transaction if DB deletion failed
         print(f"Error deleting tutor {tutor_id}: {e}")
+        # The error could be from ChromaDB deletion or SQLite deletion.
         return jsonify({"error": f"Failed to delete tutor or its associated data: {str(e)}"}), 500
     finally:
         if conn: conn.close()
@@ -298,7 +315,7 @@ def analyze_repo_route():
         return jsonify({"error": f"Error parsing request JSON: {str(e)}"}), 400
 
     tutor_id = str(uuid.uuid4())
-    project_name_to_use = data.project_name
+    project_name_to_use = data.project_name # User provided project name
 
     if data.embed_repo:
         TUTOR_PROCESSING_STATUS[tutor_id] = {
@@ -317,7 +334,7 @@ def analyze_repo_route():
             "tutor_id": tutor_id,
             "project_name": project_name_to_use
         }), 202 # Accepted
-    else: 
+    else: # Synchronous path if embed_repo is false
         try:
             parsed_additional_info_list = [item.model_dump() for item in data.additional_info_list]
             save_tutor_config(
@@ -334,8 +351,9 @@ def analyze_repo_route():
                 initial_status_message="Processing completed. Embedding skipped." # Set final message directly
             )
             # No need to call update_tutor_processing_details if save_tutor_config handles the final status for non-embed cases
+            # For consistency with async path, update in-memory status store too
             TUTOR_PROCESSING_STATUS[tutor_id] = {
-                "status": "COMPLETED",
+                "status": "COMPLETED", # Or "COMPLETED_NO_EMBEDDING"
                 "message": "Processing completed. Embedding skipped.",
                 "project_name": project_name_to_use,
                 "tutor_id": tutor_id,
@@ -357,6 +375,7 @@ def get_tutor_status_route(tutor_id: str):
     status_info = TUTOR_PROCESSING_STATUS.get(tutor_id)
 
     if not status_info:
+        # If not in memory (e.g., server restarted), try fetching from DB
         conn = None
         try:
             conn = get_db_connection()
@@ -370,11 +389,15 @@ def get_tutor_status_route(tutor_id: str):
                 db_discovered_files: Optional[int] = row["discovered_files_count"]
                 db_processing_error: Optional[str] = row["processing_error"]
 
+                # Determine overall status based on DB info
                 current_status_from_db = "UNKNOWN_COMPLETED" # Default if status message is generic
-                if db_processing_error or (db_status_message and "failed" in db_status_message.lower()):
+                if db_processing_error:
+                    current_status_from_db = "FAILED"
+                elif db_status_message and "failed" in db_status_message.lower(): # Check message for failure keywords
                     current_status_from_db = "FAILED"
                 elif db_status_message and db_status_message.lower().startswith("processing completed."):
-                     current_status_from_db = "COMPLETED"
+                     # This means embedding was either successful or skipped, both are "completed" states for polling
+                     current_status_from_db = "COMPLETED" 
                 
                 # Populate in-memory store if fetched from DB for subsequent polls for this app instance
                 status_info = {
@@ -388,6 +411,7 @@ def get_tutor_status_route(tutor_id: str):
                 TUTOR_PROCESSING_STATUS[tutor_id] = status_info # Cache it
                 return jsonify(status_info), 200
             else:
+                 # Tutor ID not found in DB and not in memory
                  return jsonify({"error": "Tutor status not found for ID.", "tutor_id": tutor_id}), 404
         except Exception as e:
             print(f"Error fetching status from DB for tutor {tutor_id}: {e}")
@@ -412,12 +436,11 @@ def query_chroma_route():
             query_text=data.query_text,
             n_results=data.n_results
         )
-        if context is not None: 
+        if context is not None: # "" is a valid response (no results), None indicates error
             return jsonify({"context": context}), 200
         else: 
-            # query_chroma_for_tutor returns "" for no results, None for error
-            # Check if an error was logged in a hypothetical status_dict if it were passed
-            return jsonify({"context": "", "message": "No relevant context found or error in query."}), 200
+            # query_chroma_for_tutor returns None if an error occurred during embedding query or Chroma query
+            return jsonify({"error": "Failed to retrieve context from ChromaDB due to an internal error."}), 500
     except Exception as e:
         print(f"Error during ChromaDB query for tutor {data.tutor_id}: {e}")
         return jsonify({"error": f"Failed to query ChromaDB: {str(e)}"}), 500
@@ -436,7 +459,7 @@ def chat_with_tutor_route():
         context_from_chroma = query_chroma_for_tutor(
             tutor_id=data.tutor_id,
             query_text=data.user_query,
-            n_results=5 
+            n_results=5 # Number of context chunks to retrieve
         )
         if context_from_chroma is None: # Indicates an error during Chroma query
             print(f"Chat Error: Failed to retrieve context for tutor {data.tutor_id}.")
@@ -448,8 +471,10 @@ def chat_with_tutor_route():
             print(f"Chat: Retrieved context for tutor {data.tutor_id} (length: {len(context_from_chroma)})")
 
 
+        # Setup Azure OpenAI client
         azure_api_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT")
         azure_api_key = os.getenv("AZURE_OPENAI_API_KEY")
+        # DEPLOYMENT_NAME for chat model, not embedding model
         azure_deployment_name = os.getenv("DEPLOYMENT_NAME", "gpt-4") # Default to gpt-4 if not set
 
         if not all([azure_api_endpoint, azure_api_key, azure_deployment_name]):
@@ -457,10 +482,10 @@ def chat_with_tutor_route():
                 var for var, val in {
                     "AZURE_OPENAI_ENDPOINT": azure_api_endpoint,
                     "AZURE_OPENAI_API_KEY": azure_api_key,
-                    "DEPLOYMENT_NAME": azure_deployment_name
+                    "DEPLOYMENT_NAME": azure_deployment_name # This is for the CHAT model
                 }.items() if not val
             ]
-            error_msg_env = f"Azure OpenAI environment variables missing: {', '.join(missing_vars)}"
+            error_msg_env = f"Azure OpenAI CHAT configuration error: Missing environment variable(s): {', '.join(missing_vars)}"
             print(f"Chat Error: {error_msg_env}")
             return jsonify({"error": error_msg_env}), 500
         
@@ -473,10 +498,18 @@ def chat_with_tutor_route():
                 http_client=httpx.Client(verify=cacert_path)
             )
         except Exception as e_client_init:
-            print(f"Chat Error: Failed to initialize AzureOpenAI client: {e_client_init}")
-            return jsonify({"error": f"Azure OpenAI client initialization failed: {str(e_client_init)}"}), 500
+            print(f"Chat Error: Failed to initialize AzureOpenAI client for chat: {e_client_init}")
+            return jsonify({"error": f"Azure OpenAI client (chat) initialization failed: {str(e_client_init)}"}), 500
 
-        system_prompt_content = "You are an AI assistant for Self Tutor. Your goal is to answer the user's questions based *primarily* on the context provided from the repository's documentation and codebase. If the context is insufficient or irrelevant, state that you cannot answer based on the provided information. Do not make assumptions beyond the context."
+        system_prompt_content = (
+            "You are an AI assistant for Self Tutor. Your goal is to answer the user's questions "
+            "based *primarily* on the context provided from the repository's documentation and codebase. "
+            "The context will include 'source' and 'file_name' metadata for each piece of information. "
+            "Use this metadata to understand where the information comes from. "
+            "If the context is insufficient or irrelevant to the user's question, clearly state that you "
+            "cannot answer based on the provided information. Do not make assumptions beyond the context. "
+            "If asked about file structure or locations, use the 'source' metadata."
+        )
         
         user_prompt_with_context = f"Based on the following context, please answer my question.\n\nContext:\n---\n{context_from_chroma if context_from_chroma else 'No specific context was found for your query.'}\n---\n\nQuestion: {data.user_query}"
 
@@ -489,7 +522,7 @@ def chat_with_tutor_route():
 
         try:
             completion = azure_client.chat.completions.create(
-                model=azure_deployment_name,
+                model=azure_deployment_name, # Chat model deployment name
                 messages=messages_for_openai,
                 max_tokens=1000, 
                 temperature=0.5, 
@@ -497,9 +530,9 @@ def chat_with_tutor_route():
                 frequency_penalty=0,
                 presence_penalty=0,
                 stop=None,
-                stream=False # Not streaming for this implementation
+                stream=False 
             )
-            ai_response_content = completion.choices[0].message.content if completion.choices else "No response generated."
+            ai_response_content = completion.choices[0].message.content if completion.choices and completion.choices[0].message else "No response generated or unexpected format."
             print(f"Chat: Received response from Azure OpenAI for tutor {data.tutor_id}")
             return jsonify(ChatWithTutorOutput(ai_response=ai_response_content).model_dump()), 200
         except Exception as e_openai:
@@ -515,3 +548,6 @@ def chat_with_tutor_route():
 
 if __name__ == '__main__':
     app.run(host='127.0.0.1', port=5001, debug=True)
+
+
+    
