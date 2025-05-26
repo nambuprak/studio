@@ -31,7 +31,7 @@ AZURE_OPENAI_API_VERSION_ENV_VAR = "AZURE_OPENAI_API_VERSION"
 AZURE_OPENAI_EMBEDDING_DEPLOYMENT_NAME_ENV_VAR = "AZURE_OPENAI_EMBEDDING_DEPLOYMENT_NAME" # e.g., your deployment of text-embedding-ada-002
 
 # Get custom embedding API URL and Token from environment variables for the old function
-CUSTOM_EMBEDDING_API_URL = os.getenv(CUSTOM_EMBEDDING_API_URL_ENV_VAR, "https://aienablement-api.mycompany.com/embeddings")
+CUSTOM_EMBEDDING_API_URL = os.getenv(CUSTOM_EMBEDDING_API_URL_ENV_VAR, "https://aienablement-api.mycompany.com/embeddings") # Fallback for POC
 CUSTOM_EMBEDDING_API_TOKEN_FROM_ENV = os.getenv(CUSTOM_EMBEDDING_API_TOKEN_ENV_VAR)
 CUSTOM_EMBEDDING_API_MODEL_NAME = os.getenv(CUSTOM_EMBEDDING_API_MODEL_NAME_ENV_VAR, "text-embedding-ada-002")
 
@@ -58,11 +58,7 @@ print(f"ChromaDB persistence directory set to: {PERSIST_DIR_BASE}")
 
 def _update_status_safely(status_dict: Optional[Dict[str, Any]], message: Optional[str] = None, error: Optional[str] = None, progress_detail: Optional[str] = None):
     if status_dict is None:
-        # print(f"Warning: status_dict is None. Message: {message}, Error: {error}, Progress: {progress_detail}")
         return
-
-    current_tutor_id = status_dict.get('tutor_id', 'N/A')
-    # log_prefix = f"Status Update (TutorID: {current_tutor_id}): " # Can be too verbose here
 
     if message:
         status_dict["message"] = message
@@ -73,14 +69,18 @@ def _update_status_safely(status_dict: Optional[Dict[str, Any]], message: Option
             status_dict["message"] = f"{status_dict['message']} - {error_message_to_set}"
         else:
             status_dict["message"] = error_message_to_set
-
+    
+    # If progress_detail is provided and it's more specific than the current message, update the message.
+    # Avoid overwriting a final "completed" or "failed" message with a progress detail.
     if progress_detail:
         status_dict["progress_detail"] = progress_detail
-        # Update main message only if it's currently a generic processing/embedding message or empty
         current_msg_lower = status_dict.get("message", "").lower()
-        if not current_msg_lower or \
-           current_msg_lower.startswith(("processing", "embedding","starting","cloning", "initializing", "discovered", "split", "embedding chunk")):
-             status_dict["message"] = progress_detail
+        is_final_status = "completed" in current_msg_lower or "failed" in current_msg_lower
+        
+        if not is_final_status:
+            if not current_msg_lower or \
+               any(kw in current_msg_lower for kw in ["processing", "embedding","starting","cloning", "initializing", "discovered", "split", "embedding chunk"]):
+                 status_dict["message"] = progress_detail
 
 
 def get_embedding_for_text_custom_api(text: str, status_dict: Optional[dict] = None) -> Optional[List[float]]:
@@ -171,10 +171,8 @@ def get_embedding_for_text(text: str, status_dict: Optional[dict] = None) -> Opt
     retry_count = 0
     while retry_count < MAX_RETRIES_EMBEDDING:
         try:
-            # Replace spaces and newlines in text input to prevent issues with some models
             processed_text = text.replace("\\n", " ").replace("\\r", " ").strip()
-            if not processed_text: # handle empty string after processing
-                # print(f"Skipping embedding for empty text input.")
+            if not processed_text: 
                 return None
 
             response = azure_client.embeddings.create(
@@ -188,7 +186,7 @@ def get_embedding_for_text(text: str, status_dict: Optional[dict] = None) -> Opt
                 if status_dict: _update_status_safely(status_dict, error=err_msg_format, progress_detail=err_msg_format)
                 else: print(err_msg_format)
                 return None
-        except Exception as e: # Catch broader exceptions from the OpenAI client
+        except Exception as e: 
             error_msg = f"Azure OpenAI Embedding API call failed: {e}. Attempt {retry_count + 1}/{MAX_RETRIES_EMBEDDING} for text: '{text[:50]}...'."
             if status_dict: _update_status_safely(status_dict, error=error_msg, progress_detail=error_msg)
             else: print(error_msg)
@@ -223,58 +221,68 @@ def initialize_chroma_collection(tutor_id: str, status_dict: Optional[dict] = No
 def delete_chroma_collection_for_tutor(tutor_id: str):
     """Deletes the ChromaDB collection associated with a given tutor_id, including its physical directory."""
     collection_name = f"tutor_{tutor_id.replace('-', '_')}"
-    collection_uuid_str: Optional[str] = None
-    chroma_client = None
-    
+    print(f"Attempting to delete ChromaDB collection: '{collection_name}' for tutor_id: {tutor_id}")
+    print(f"ChromaDB persistence directory is: {PERSIST_DIR_BASE}")
+
     try:
-        print(f"Attempting to delete ChromaDB collection: {collection_name} from {PERSIST_DIR_BASE}")
         chroma_client = chromadb.PersistentClient(path=PERSIST_DIR_BASE)
         
-        # Get collection to find its UUID for physical deletion
+        collection_uuid_str = None
+        physical_collection_path = None
+        collection_existed_before_api_delete = False
+
+        # Step 1: Try to get the collection to find its UUID and check initial existence
         try:
             target_collection_obj = chroma_client.get_collection(name=collection_name)
-            collection_uuid_str = str(target_collection_obj.id) # This is the UUID
-            print(f"Found collection '{collection_name}' with UUID: {collection_uuid_str}")
-        except Exception as e_get_coll: 
-            # This exception block handles cases where the collection might not exist by name.
-            # If we can't get it by name, it means it likely doesn't exist or an error occurred.
-            # We shouldn't try to delete its physical folder if we don't know its UUID.
-            print(f"Could not get collection '{collection_name}' to find its UUID (it might not exist or an error occurred): {e_get_coll}")
-            # Check if a folder with the *collection_name* exists (less likely, but possible if something went wrong)
-            collection_folder_by_name_path = os.path.join(PERSIST_DIR_BASE, collection_name)
-            if os.path.exists(collection_folder_by_name_path) and os.path.isdir(collection_folder_by_name_path):
-                try:
-                    print(f"Attempting to delete folder by name: {collection_folder_by_name_path} as UUID was not retrievable.")
-                    shutil.rmtree(collection_folder_by_name_path)
-                    print(f"Successfully deleted physical directory by name for collection: {collection_folder_by_name_path}")
-                except Exception as e_rmtree_by_name:
-                    print(f"Error deleting physical directory by name '{collection_folder_by_name_path}': {e_rmtree_by_name}. Manual cleanup might be needed.")
-            return # Exit if collection not found by name and no folder by name exists
-
-        # Attempt API deletion (if collection was found by name)
-        if target_collection_obj: # Ensure target_collection_obj is not None
-            try:
-                chroma_client.delete_collection(name=collection_name)
-                print(f"Successfully requested API deletion of ChromaDB collection: {collection_name}")
-            except Exception as e_api_delete:
-                print(f"Error during API deletion of ChromaDB collection '{collection_name}': {e_api_delete}. Proceeding to attempt physical cleanup if UUID was found.")
-
-        # Attempt physical directory deletion using UUID if it was found
-        if collection_uuid_str:
-            collection_data_path_by_uuid = os.path.join(PERSIST_DIR_BASE, collection_uuid_str)
-            if os.path.exists(collection_data_path_by_uuid) and os.path.isdir(collection_data_path_by_uuid):
-                try:
-                    shutil.rmtree(collection_data_path_by_uuid)
-                    print(f"Successfully deleted physical directory for collection UUID '{collection_uuid_str}' ('{collection_name}'): {collection_data_path_by_uuid}")
-                except Exception as e_rmtree_uuid:
-                    print(f"Error deleting physical directory by UUID '{collection_data_path_by_uuid}': {e_rmtree_uuid}. Manual cleanup might be needed.")
+            collection_uuid_str = str(target_collection_obj.id) # ChromaDB collection ID (UUID)
+            physical_collection_path = os.path.join(PERSIST_DIR_BASE, collection_uuid_str)
+            print(f"Found collection '{collection_name}' with UUID: {collection_uuid_str}. Expected physical path: {physical_collection_path}")
+            
+            if os.path.exists(physical_collection_path) and os.path.isdir(physical_collection_path):
+                collection_existed_before_api_delete = True
+                print(f"Physical directory '{physical_collection_path}' exists before API deletion attempt.")
             else:
-                print(f"Physical directory for collection UUID '{collection_uuid_str}' ('{collection_name}') not found at '{collection_data_path_by_uuid}', no physical deletion needed or already removed.")
+                print(f"Physical directory '{physical_collection_path}' does NOT exist before API deletion attempt (it might have been cleaned up previously or path is incorrect).")
+        
+        except Exception as e_get_coll:
+            # This means the collection does not exist by that name in ChromaDB's metadata.
+            # It might have been deleted already, or never created properly.
+            print(f"Could not get collection '{collection_name}' from ChromaDB (it might not exist or an error occurred): {e_get_coll}")
+            print(f"Skipping further deletion steps for '{collection_name}' as collection object was not retrieved.")
+            return # Exit if we can't get the collection, as we can't reliably know its UUID-based folder.
+
+        # Step 2: Attempt API deletion
+        api_delete_call_made = False
+        try:
+            chroma_client.delete_collection(name=collection_name)
+            print(f"API call to delete_collection('{collection_name}') was successful.")
+            api_delete_call_made = True
+        except Exception as e_api_delete:
+            print(f"Error during API call to delete_collection('{collection_name}'): {e_api_delete}. Will still attempt physical cleanup if path is known.")
+
+        # Step 3: Attempt physical directory deletion if a path was determined
+        if physical_collection_path:
+            if os.path.exists(physical_collection_path) and os.path.isdir(physical_collection_path):
+                print(f"Physical directory '{physical_collection_path}' still exists after API delete attempt. Attempting shutil.rmtree...")
+                try:
+                    shutil.rmtree(physical_collection_path)
+                    print(f"Successfully deleted physical directory: {physical_collection_path}")
+                except Exception as e_rmtree_uuid:
+                    print(f"Error deleting physical directory '{physical_collection_path}' with shutil.rmtree: {e_rmtree_uuid}. Manual cleanup might be needed.")
+            else:
+                # Directory doesn't exist. If it existed before and API call was made, assume API call removed it.
+                if collection_existed_before_api_delete and api_delete_call_made:
+                    print(f"Physical directory '{physical_collection_path}' no longer exists. Likely removed by the API delete_collection call.")
+                elif collection_existed_before_api_delete and not api_delete_call_made:
+                     print(f"Physical directory '{physical_collection_path}' no longer exists, but API delete call failed or was not made successfully. Folder may have been removed by other means or an issue occurred.")
+                else: # Did not exist before, and still does not exist.
+                    print(f"Physical directory '{physical_collection_path}' was not found initially and is still not found.")
         else:
-             print(f"No collection UUID found for '{collection_name}', skipping targeted physical directory deletion by UUID.")
+            # This case should ideally not be reached if get_collection was successful
+            print(f"Physical collection path for '{collection_name}' was not determined. Skipping physical deletion of UUID-based folder.")
 
     except Exception as e:
-        print(f"General error during ChromaDB collection deletion for '{collection_name}': {e}. Manual cleanup might be needed.")
+        print(f"General error during ChromaDB collection deletion process for '{collection_name}' (tutor_id {tutor_id}): {e}. Manual cleanup might be needed.")
 
 
 def add_chunk_to_chromadb(collection: ChromaCollection, text_chunk: str, embedding: List[float], metadata: Dict[str, Any], status_dict: Optional[dict] = None):
@@ -321,15 +329,9 @@ def _process_text_document_for_embedding(
             continue
         
         progress_update = f"Embedding chunk {i+1}/{num_chunks} from '{source_name}'..."
-        # Only set as main message if it's a generic one
-        current_message_lower = status_dict.get("message", "").lower()
-        if not current_message_lower or any(kw in current_message_lower for kw in ["processing", "embedding", "starting", "cloning", "discovered", "split"]):
-            _update_status_safely(status_dict, message=progress_update, progress_detail=progress_update)
-        else:
-            _update_status_safely(status_dict, progress_detail=progress_update)
+        _update_status_safely(status_dict, progress_detail=progress_update) # Always set progress_detail
 
 
-        # Uses the new Azure OpenAI based embedding function
         embedding = get_embedding_for_text(chunk_text, status_dict)
         if embedding:
             metadata = {"source": source_name, "chunk_index": i}
@@ -343,7 +345,6 @@ def _process_text_document_for_embedding(
                  metadata["doc_type"] = "generic_text"
             add_chunk_to_chromadb(collection, chunk_text, embedding, metadata, status_dict)
         else:
-            # Error messages for failed embedding are handled by get_embedding_for_text
             _update_status_safely(status_dict, message=f"Failed to get embedding for chunk {i+1}/{num_chunks} from '{source_name}'. Skipping chunk.")
 
 
@@ -384,8 +385,6 @@ def embed_documents_for_tutor(
         _update_status_safely(status_dict, message=f"Fatal: Could not initialize ChromaDB for tutor {tutor_id}. Aborting embedding.", error="ChromaDB init failed")
         return
 
-    # Langchain's CharacterTextSplitter is good for general text.
-    # Consider other splitters (e.g., RecursiveCharacterTextSplitter, CodeSplitter) for code if needed.
     text_splitter = CharacterTextSplitter(chunk_size=1700, chunk_overlap=200, separator="\\n")
 
     if repo_overview and repo_overview.strip():
@@ -398,7 +397,6 @@ def embed_documents_for_tutor(
             title = info_item.get('title', '')
             description = info_item.get('description', '')
             if title or description:
-                # Combine title and description for a richer context chunk
                 full_text = f"Title: {title}\\nDescription: {description}"
                 source_name_info = f"additional_info_{i}_{title.replace(' ', '_').lower()[:20]}"
                 _process_text_document_for_embedding(full_text, source_name_info, collection, text_splitter, status_dict)
@@ -409,8 +407,6 @@ def embed_documents_for_tutor(
 
     if file_paths:
         _update_status_safely(status_dict, message=f"Preparing to embed content from {len(file_paths)} discovered files...")
-        # Adjust max_workers based on API rate limits and server capacity
-        # Using a modest number for now to avoid overwhelming a single API key if rate limited
         max_workers = min(5, os.cpu_count() * 2 if os.cpu_count() else 4) 
 
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -428,12 +424,10 @@ def embed_documents_for_tutor(
             total_files = len(file_paths)
             for i, future in enumerate(futures):
                 try:
-                    future.result() # Wait for each file's processing to complete
+                    future.result() 
                     processed_files_count +=1
                     _update_status_safely(status_dict, progress_detail=f"Completed embedding for {processed_files_count}/{total_files} files.")
-                except Exception as e: # Catch errors from individual file processing futures
-                    # Error from future.result() should ideally already update status_dict via _update_status_safely within the task
-                    # This is a fallback log.
+                except Exception as e: 
                     print(f"An error occurred processing one of the files ({os.path.basename(file_paths[i])}): {e}")
                     _update_status_safely(status_dict, message=f"An error occurred processing file: {os.path.basename(file_paths[i])}")
         _update_status_safely(status_dict, message=f"Finished embedding content from {processed_files_count}/{total_files} files.")
@@ -456,10 +450,8 @@ def query_chroma_for_tutor(tutor_id: str, query_text: str, n_results: int = 5, s
         else: print(f"{log_prefix}{error_msg}")
         return ""
 
-    # Use the new Azure OpenAI based embedding function for the query
     query_embedding = get_embedding_for_text(query_text, status_dict)
     if not query_embedding:
-        # Error is logged by get_embedding_for_text, just ensure main message reflects failure
         error_msg_emb = f"Failed to generate embedding for query: '{query_text[:50]}...'"
         if status_dict: _update_status_safely(status_dict, message=error_msg_emb)
         else: print(f"{log_prefix}{error_msg_emb}")
@@ -469,17 +461,13 @@ def query_chroma_for_tutor(tutor_id: str, query_text: str, n_results: int = 5, s
         results = collection.query(
             query_embeddings=[query_embedding],
             n_results=n_results,
-            include=["documents"] # Only fetch documents, not embeddings or metadatas for context
+            include=["documents"] 
         )
 
         documents = results.get("documents")
         if documents and isinstance(documents, list) and len(documents) > 0:
-            # documents[0] will be a list of the actual document strings
             valid_documents = [str(doc) for doc in documents[0] if doc is not None]
             combined_content = "\\n---\\n".join(valid_documents)
-            # success_msg = f"Retrieved {len(valid_documents)} context chunks."
-            # if status_dict: _update_status_safely(status_dict, message=success_msg) # Can be too verbose
-            # else: print(f"{log_prefix}{success_msg}")
             return combined_content
         else:
             no_results_msg = "No relevant documents found in ChromaDB for the query."
@@ -491,6 +479,5 @@ def query_chroma_for_tutor(tutor_id: str, query_text: str, n_results: int = 5, s
         if status_dict: _update_status_safely(status_dict, error=error_msg_query, message=error_msg_query)
         else: print(f"{log_prefix}{error_msg_query}")
         return ""
-
 
     
