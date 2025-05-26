@@ -9,7 +9,7 @@ from typing import List, Dict, Any, Optional
 import shutil # For rmtree
 import chromadb
 from chromadb.api.models.Collection import Collection as ChromaCollection
-from langchain_community.document_loaders import TextLoader # Assuming this is used elsewhere or planned
+# from langchain_community.document_loaders import TextLoader # Assuming this is used elsewhere or planned -> Not currently used.
 from langchain.text_splitter import CharacterTextSplitter
 
 # For Azure OpenAI Embeddings
@@ -32,13 +32,15 @@ AZURE_OPENAI_EMBEDDING_DEPLOYMENT_NAME_ENV_VAR = "AZURE_OPENAI_EMBEDDING_DEPLOYM
 
 # Get custom embedding API URL and Token from environment variables for the old function
 CUSTOM_EMBEDDING_API_URL = os.getenv(CUSTOM_EMBEDDING_API_URL_ENV_VAR, "https://aienablement-api.mycompany.com/embeddings")
-CUSTOM_EMBEDDING_API_TOKEN = os.getenv(CUSTOM_EMBEDDING_API_TOKEN_ENV_VAR)
+CUSTOM_EMBEDDING_API_TOKEN_FROM_ENV = os.getenv(CUSTOM_EMBEDDING_API_TOKEN_ENV_VAR)
 CUSTOM_EMBEDDING_API_MODEL_NAME = os.getenv(CUSTOM_EMBEDDING_API_MODEL_NAME_ENV_VAR, "text-embedding-ada-002")
 
 
-if CUSTOM_EMBEDDING_API_TOKEN is None:
+# Use a placeholder if the token is not set in the environment
+CUSTOM_EMBEDDING_API_TOKEN = CUSTOM_EMBEDDING_API_TOKEN_FROM_ENV if CUSTOM_EMBEDDING_API_TOKEN_FROM_ENV else "Bearer placeholder_token_custom_api"
+if CUSTOM_EMBEDDING_API_TOKEN == "Bearer placeholder_token_custom_api":
     print(f"Warning: {CUSTOM_EMBEDDING_API_TOKEN_ENV_VAR} environment variable is not set. Using placeholder token for get_embedding_for_text_custom_api.")
-    CUSTOM_EMBEDDING_API_TOKEN = "Bearer placeholder_token_custom_api"
+
 
 # Base directory for ChromaDB persistence.
 # Corrected to point to the project root's `server/chroma_db_store`
@@ -60,11 +62,10 @@ def _update_status_safely(status_dict: Optional[Dict[str, Any]], message: Option
         return
 
     current_tutor_id = status_dict.get('tutor_id', 'N/A')
-    log_prefix = f"Status Update (TutorID: {current_tutor_id}): "
+    # log_prefix = f"Status Update (TutorID: {current_tutor_id}): " # Can be too verbose here
 
     if message:
         status_dict["message"] = message
-        # print(f"{log_prefix}{message}") # Can be too verbose, app.py handles primary status printing
     if error:
         status_dict["error"] = error
         error_message_to_set = f"Error: {error}"
@@ -72,7 +73,6 @@ def _update_status_safely(status_dict: Optional[Dict[str, Any]], message: Option
             status_dict["message"] = f"{status_dict['message']} - {error_message_to_set}"
         else:
             status_dict["message"] = error_message_to_set
-        # print(f"{log_prefix}Error recorded: {error}")
 
     if progress_detail:
         status_dict["progress_detail"] = progress_detail
@@ -81,7 +81,6 @@ def _update_status_safely(status_dict: Optional[Dict[str, Any]], message: Option
         if not current_msg_lower or \
            current_msg_lower.startswith(("processing", "embedding","starting","cloning", "initializing", "discovered", "split", "embedding chunk")):
              status_dict["message"] = progress_detail
-        # print(f"{log_prefix}Progress: {progress_detail}")
 
 
 def get_embedding_for_text_custom_api(text: str, status_dict: Optional[dict] = None) -> Optional[List[float]]:
@@ -173,7 +172,7 @@ def get_embedding_for_text(text: str, status_dict: Optional[dict] = None) -> Opt
     while retry_count < MAX_RETRIES_EMBEDDING:
         try:
             # Replace spaces and newlines in text input to prevent issues with some models
-            processed_text = text.replace("\n", " ").replace("\r", " ").strip()
+            processed_text = text.replace("\\n", " ").replace("\\r", " ").strip()
             if not processed_text: # handle empty string after processing
                 # print(f"Skipping embedding for empty text input.")
                 return None
@@ -234,34 +233,45 @@ def delete_chroma_collection_for_tutor(tutor_id: str):
         # Get collection to find its UUID for physical deletion
         try:
             target_collection_obj = chroma_client.get_collection(name=collection_name)
-            collection_uuid_str = str(target_collection_obj.id)
+            collection_uuid_str = str(target_collection_obj.id) # This is the UUID
             print(f"Found collection '{collection_name}' with UUID: {collection_uuid_str}")
-        except Exception as e_get_coll: # Handles case where collection might not exist
+        except Exception as e_get_coll: 
+            # This exception block handles cases where the collection might not exist by name.
+            # If we can't get it by name, it means it likely doesn't exist or an error occurred.
+            # We shouldn't try to delete its physical folder if we don't know its UUID.
             print(f"Could not get collection '{collection_name}' to find its UUID (it might not exist or an error occurred): {e_get_coll}")
-            # If we can't get it by name, it might not exist, so no further deletion actions for this collection are needed by API or physically by UUID.
-            # However, if a folder with collection_name exists, it's an anomaly, we won't touch it here.
-            return # Exit if collection not found by name
-
-        # Attempt API deletion
-        try:
-            chroma_client.delete_collection(name=collection_name)
-            print(f"Successfully requested API deletion of ChromaDB collection: {collection_name}")
-        except Exception as e_api_delete:
-            print(f"Error during API deletion of ChromaDB collection '{collection_name}': {e_api_delete}. Proceeding to attempt physical cleanup if UUID was found.")
-
-        # Attempt physical directory deletion if UUID was found
-        if collection_uuid_str:
-            collection_data_path = os.path.join(PERSIST_DIR_BASE, collection_uuid_str)
-            if os.path.exists(collection_data_path) and os.path.isdir(collection_data_path):
+            # Check if a folder with the *collection_name* exists (less likely, but possible if something went wrong)
+            collection_folder_by_name_path = os.path.join(PERSIST_DIR_BASE, collection_name)
+            if os.path.exists(collection_folder_by_name_path) and os.path.isdir(collection_folder_by_name_path):
                 try:
-                    shutil.rmtree(collection_data_path)
-                    print(f"Successfully deleted physical directory for collection '{collection_name}': {collection_data_path}")
-                except Exception as e_rmtree:
-                    print(f"Error deleting physical directory '{collection_data_path}': {e_rmtree}. Manual cleanup might be needed.")
+                    print(f"Attempting to delete folder by name: {collection_folder_by_name_path} as UUID was not retrievable.")
+                    shutil.rmtree(collection_folder_by_name_path)
+                    print(f"Successfully deleted physical directory by name for collection: {collection_folder_by_name_path}")
+                except Exception as e_rmtree_by_name:
+                    print(f"Error deleting physical directory by name '{collection_folder_by_name_path}': {e_rmtree_by_name}. Manual cleanup might be needed.")
+            return # Exit if collection not found by name and no folder by name exists
+
+        # Attempt API deletion (if collection was found by name)
+        if target_collection_obj: # Ensure target_collection_obj is not None
+            try:
+                chroma_client.delete_collection(name=collection_name)
+                print(f"Successfully requested API deletion of ChromaDB collection: {collection_name}")
+            except Exception as e_api_delete:
+                print(f"Error during API deletion of ChromaDB collection '{collection_name}': {e_api_delete}. Proceeding to attempt physical cleanup if UUID was found.")
+
+        # Attempt physical directory deletion using UUID if it was found
+        if collection_uuid_str:
+            collection_data_path_by_uuid = os.path.join(PERSIST_DIR_BASE, collection_uuid_str)
+            if os.path.exists(collection_data_path_by_uuid) and os.path.isdir(collection_data_path_by_uuid):
+                try:
+                    shutil.rmtree(collection_data_path_by_uuid)
+                    print(f"Successfully deleted physical directory for collection UUID '{collection_uuid_str}' ('{collection_name}'): {collection_data_path_by_uuid}")
+                except Exception as e_rmtree_uuid:
+                    print(f"Error deleting physical directory by UUID '{collection_data_path_by_uuid}': {e_rmtree_uuid}. Manual cleanup might be needed.")
             else:
-                print(f"Physical directory for collection UUID '{collection_uuid_str}' ('{collection_name}') not found at '{collection_data_path}', no physical deletion needed or already removed.")
+                print(f"Physical directory for collection UUID '{collection_uuid_str}' ('{collection_name}') not found at '{collection_data_path_by_uuid}', no physical deletion needed or already removed.")
         else:
-             print(f"No collection UUID found for '{collection_name}', skipping targeted physical directory deletion.")
+             print(f"No collection UUID found for '{collection_name}', skipping targeted physical directory deletion by UUID.")
 
     except Exception as e:
         print(f"General error during ChromaDB collection deletion for '{collection_name}': {e}. Manual cleanup might be needed.")
@@ -309,7 +319,15 @@ def _process_text_document_for_embedding(
         if not chunk_text.strip():
             _update_status_safely(status_dict, progress_detail=f"Skipping empty chunk {i+1}/{num_chunks} from '{source_name}'.")
             continue
-        _update_status_safely(status_dict, progress_detail=f"Embedding chunk {i+1}/{num_chunks} from '{source_name}'...")
+        
+        progress_update = f"Embedding chunk {i+1}/{num_chunks} from '{source_name}'..."
+        # Only set as main message if it's a generic one
+        current_message_lower = status_dict.get("message", "").lower()
+        if not current_message_lower or any(kw in current_message_lower for kw in ["processing", "embedding", "starting", "cloning", "discovered", "split"]):
+            _update_status_safely(status_dict, message=progress_update, progress_detail=progress_update)
+        else:
+            _update_status_safely(status_dict, progress_detail=progress_update)
+
 
         # Uses the new Azure OpenAI based embedding function
         embedding = get_embedding_for_text(chunk_text, status_dict)
@@ -325,6 +343,7 @@ def _process_text_document_for_embedding(
                  metadata["doc_type"] = "generic_text"
             add_chunk_to_chromadb(collection, chunk_text, embedding, metadata, status_dict)
         else:
+            # Error messages for failed embedding are handled by get_embedding_for_text
             _update_status_safely(status_dict, message=f"Failed to get embedding for chunk {i+1}/{num_chunks} from '{source_name}'. Skipping chunk.")
 
 
@@ -367,7 +386,7 @@ def embed_documents_for_tutor(
 
     # Langchain's CharacterTextSplitter is good for general text.
     # Consider other splitters (e.g., RecursiveCharacterTextSplitter, CodeSplitter) for code if needed.
-    text_splitter = CharacterTextSplitter(chunk_size=1700, chunk_overlap=200, separator="\n")
+    text_splitter = CharacterTextSplitter(chunk_size=1700, chunk_overlap=200, separator="\\n")
 
     if repo_overview and repo_overview.strip():
         _process_text_document_for_embedding(repo_overview, "repository_overview", collection, text_splitter, status_dict)
@@ -380,7 +399,7 @@ def embed_documents_for_tutor(
             description = info_item.get('description', '')
             if title or description:
                 # Combine title and description for a richer context chunk
-                full_text = f"Title: {title}\nDescription: {description}"
+                full_text = f"Title: {title}\\nDescription: {description}"
                 source_name_info = f"additional_info_{i}_{title.replace(' ', '_').lower()[:20]}"
                 _process_text_document_for_embedding(full_text, source_name_info, collection, text_splitter, status_dict)
             else:
@@ -391,6 +410,7 @@ def embed_documents_for_tutor(
     if file_paths:
         _update_status_safely(status_dict, message=f"Preparing to embed content from {len(file_paths)} discovered files...")
         # Adjust max_workers based on API rate limits and server capacity
+        # Using a modest number for now to avoid overwhelming a single API key if rate limited
         max_workers = min(5, os.cpu_count() * 2 if os.cpu_count() else 4) 
 
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -410,10 +430,12 @@ def embed_documents_for_tutor(
                 try:
                     future.result() # Wait for each file's processing to complete
                     processed_files_count +=1
-                    # Periodic status update can be useful here if embedding takes very long per file
-                    # _update_status_safely(status_dict, progress_detail=f"Completed embedding for {processed_files_count}/{total_files} files.")
+                    _update_status_safely(status_dict, progress_detail=f"Completed embedding for {processed_files_count}/{total_files} files.")
                 except Exception as e: # Catch errors from individual file processing futures
-                    _update_status_safely(status_dict, message=f"An error occurred processing one of the files ({os.path.basename(file_paths[i])}): {e}")
+                    # Error from future.result() should ideally already update status_dict via _update_status_safely within the task
+                    # This is a fallback log.
+                    print(f"An error occurred processing one of the files ({os.path.basename(file_paths[i])}): {e}")
+                    _update_status_safely(status_dict, message=f"An error occurred processing file: {os.path.basename(file_paths[i])}")
         _update_status_safely(status_dict, message=f"Finished embedding content from {processed_files_count}/{total_files} files.")
     else:
         _update_status_safely(status_dict, progress_detail="No files discovered or provided for embedding.")
@@ -423,25 +445,24 @@ def embed_documents_for_tutor(
 
 def query_chroma_for_tutor(tutor_id: str, query_text: str, n_results: int = 5, status_dict: Optional[Dict[str, Any]] = None) -> str:
     """Queries ChromaDB for a given tutor_id and query_text using Azure OpenAI for query embedding."""
-    if status_dict: _update_status_safely(status_dict, message=f"Querying ChromaDB for tutor {tutor_id} with query: '{query_text[:50]}...'")
-    else: print(f"Querying ChromaDB for tutor {tutor_id} with query: '{query_text[:50]}...'")
+    log_prefix = f"QueryChroma (TutorID: {tutor_id}): "
+    if status_dict: _update_status_safely(status_dict, message=f"Querying ChromaDB with: '{query_text[:50]}...'")
+    else: print(f"{log_prefix}Querying with: '{query_text[:50]}...'")
 
     collection = initialize_chroma_collection(tutor_id, status_dict)
     if not collection:
         error_msg = "Failed to initialize ChromaDB collection for querying."
-        if status_dict: _update_status_safely(status_dict, error=error_msg)
-        else: print(error_msg)
+        if status_dict: _update_status_safely(status_dict, error=error_msg, message=error_msg)
+        else: print(f"{log_prefix}{error_msg}")
         return ""
 
     # Use the new Azure OpenAI based embedding function for the query
     query_embedding = get_embedding_for_text(query_text, status_dict)
     if not query_embedding:
+        # Error is logged by get_embedding_for_text, just ensure main message reflects failure
         error_msg_emb = f"Failed to generate embedding for query: '{query_text[:50]}...'"
-        if status_dict:
-            # Error is already logged to status_dict by get_embedding_for_text
-            _update_status_safely(status_dict, message=error_msg_emb) # Ensure main message reflects this
-        else:
-            print(error_msg_emb)
+        if status_dict: _update_status_safely(status_dict, message=error_msg_emb)
+        else: print(f"{log_prefix}{error_msg_emb}")
         return ""
 
     try:
@@ -455,20 +476,21 @@ def query_chroma_for_tutor(tutor_id: str, query_text: str, n_results: int = 5, s
         if documents and isinstance(documents, list) and len(documents) > 0:
             # documents[0] will be a list of the actual document strings
             valid_documents = [str(doc) for doc in documents[0] if doc is not None]
-            combined_content = "\n---\n".join(valid_documents)
-            # success_msg = f"Retrieved {len(valid_documents)} context chunks from ChromaDB."
+            combined_content = "\\n---\\n".join(valid_documents)
+            # success_msg = f"Retrieved {len(valid_documents)} context chunks."
             # if status_dict: _update_status_safely(status_dict, message=success_msg) # Can be too verbose
-            # else: print(success_msg)
+            # else: print(f"{log_prefix}{success_msg}")
             return combined_content
         else:
             no_results_msg = "No relevant documents found in ChromaDB for the query."
             if status_dict: _update_status_safely(status_dict, message=no_results_msg)
-            else: print(no_results_msg)
+            else: print(f"{log_prefix}{no_results_msg}")
             return ""
     except Exception as e:
         error_msg_query = f"Error querying ChromaDB: {e}"
-        if status_dict: _update_status_safely(status_dict, error=error_msg_query)
-        else: print(error_msg_query)
+        if status_dict: _update_status_safely(status_dict, error=error_msg_query, message=error_msg_query)
+        else: print(f"{log_prefix}{error_msg_query}")
         return ""
+
 
     
